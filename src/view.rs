@@ -260,9 +260,12 @@ fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
         };
         let mut row = nodes![
             indicator,
+            // A long name wraps instead of pushing the row past the card;
+            // the last line gives way first.
             ui::text(ui::span(&b.name).style("strong"))
-                .key("n")
-                .shrink(0.0),
+                .wrap("char")
+                .shrink(1.0)
+                .key("n"),
         ];
         if let Some(phase) = &b.phase {
             row.push(ui::badge(phase).tone("info").key("p").into());
@@ -276,7 +279,7 @@ fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
                 .truncate("end")
                 .wrap("none")
                 .grow(1.0)
-                .shrink(1.0)
+                .shrink(100.0)
                 .key("l")
                 .into(),
         );
@@ -377,12 +380,13 @@ fn running_copies(state: &State) -> Option<Node> {
                 .children(nodes![
                     ui::icon("download").tone("info").key("i"),
                     ui::text(ui::span(&c.name).style("strong"))
-                        .key("n")
-                        .shrink(0.0),
+                        .wrap("char")
+                        .shrink(1.0)
+                        .key("n"),
                     ui::text(ui::span(from).style("muted"))
                         .truncate("start")
                         .wrap("none")
-                        .shrink(1.0)
+                        .shrink(100.0)
                         .key("f"),
                     bar,
                 ])

@@ -12,7 +12,7 @@ let
 
 in
 rustPlatform.buildRustPackage {
-  inherit ((fromTOML (builtins.readFile "${src}/Cargo.toml")).package) version;
+  inherit ((fromTOML (builtins.readFile "${src}/crates/nom/Cargo.toml")).package) version;
   inherit src;
   pname = "tern-nom";
 
@@ -33,6 +33,16 @@ rustPlatform.buildRustPackage {
     ln -s ${lib.getExe' nix-output-monitor "nom-build"} $out/bin/nom-build
     ln -s ${lib.getExe' nix-output-monitor "nom-shell"} $out/bin/nom-shell
   '';
+
+  cargoBuildFlags = [
+    "-p"
+    "tern-nom"
+  ];
+
+  cargoTestFlags = [
+    "-p"
+    "tern-nom"
+  ];
 
   useNextest = true;
 

@@ -1,6 +1,6 @@
 {
 
-  description = "nix-output-monitor drawn natively in Tern";
+  description = "Plugins for the Tern terminal";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -29,7 +29,6 @@
     inputs:
     inputs.snowfall-lib.mkFlake {
       inherit inputs;
-      alias.packages.default = "tern-nom";
 
       outputs-builder =
         channels:
@@ -70,7 +69,7 @@
         };
 
       snowfall = {
-        namespace = "tern-nom";
+        namespace = "tern-plugins";
         root = ./nix;
       };
 

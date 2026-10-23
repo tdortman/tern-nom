@@ -1,16 +1,17 @@
-[package]
-name = "tern-nom"
-version = "0.16.2"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 edition = "2024"
-description = "nix-output-monitor drawn natively in Tern over the Tern Surface Protocol"
 license = "MIT"
 publish = false
 
-[dependencies]
-libc = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tern-sdk = "0.1"
+[workspace.dependencies]
+libc = "=0.2.191"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+tern-sdk = "=0.1.0"
 
 [profile.release]
 lto = true

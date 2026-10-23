@@ -1,0 +1,87 @@
+@nix {"action":"start","id":962755574104214,"level":6,"parent":0,"text":"querying info about missing paths","type":0}
+@nix {"action":"stop","id":962755574104214}
+@nix {"action":"msg","level":3,"msg":"these \u001b[35;1m4\u001b[0m derivations will be built:"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-a-18439.drv"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2-b-18439.drv"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-18439.drv"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4-top-18439.drv"}
+@nix {"action":"msg","level":3,"msg":"this path will be fetched (\u001b[35;1m0.00\u001b[0m MiB download, \u001b[35;1m0.27\u001b[0m MiB unpacked):"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5-hello-2.12.3"}
+@nix {"action":"start","id":962755574104281,"level":0,"parent":0,"text":"","type":102}
+@nix {"action":"start","id":962755574104282,"level":0,"parent":0,"text":"","type":104}
+@nix {"action":"start","id":962755574104283,"level":0,"parent":0,"text":"","type":103}
+@nix {"action":"result","fields":[0,1,0,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,0],"id":962755574104281,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5-hello-2.12.3","https://cache.numtide.com"],"id":962755574104284,"level":0,"parent":0,"text":"","type":108}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5-hello-2.12.3","https://cache.numtide.com","local"],"id":962755574104285,"level":3,"parent":962755574104284,"text":"copying path '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5-hello-2.12.3' from 'https://cache.numtide.com'","type":100}
+@nix {"action":"result","fields":[0,5,0,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[0,1,1,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2-b-18439.drv","",1,1],"id":962755574104287,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2-b-18439.drv'","type":105}
+@nix {"action":"result","fields":[0,5,1,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[0,1,1,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[101807,279592,0,0],"id":962755574104285,"type":105}
+@nix {"action":"result","fields":[131072,279592,0,0],"id":962755574104285,"type":105}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-a-18439.drv","",1,1],"id":962755574104288,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-a-18439.drv'","type":105}
+@nix {"action":"result","fields":[198751,279592,0,0],"id":962755574104285,"type":105}
+@nix {"action":"result","fields":[262144,279592,0,0],"id":962755574104285,"type":105}
+@nix {"action":"stop","id":962755574104285}
+@nix {"action":"stop","id":962755574104284}
+@nix {"action":"result","fields":[0,4,2,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":["building b"],"id":962755574104287,"type":101}
+@nix {"action":"result","fields":["b step 1"],"id":962755574104287,"type":101}
+@nix {"action":"result","fields":["building a"],"id":962755574104288,"type":101}
+@nix {"action":"result","fields":["a step 1"],"id":962755574104288,"type":101}
+@nix {"action":"result","fields":["b step 2"],"id":962755574104287,"type":101}
+@nix {"action":"result","fields":["a step 2"],"id":962755574104288,"type":101}
+@nix {"action":"result","fields":["b step 3"],"id":962755574104287,"type":101}
+@nix {"action":"result","fields":["a step 3"],"id":962755574104288,"type":101}
+@nix {"action":"stop","id":962755574104287}
+@nix {"action":"result","fields":[1,4,1,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"stop","id":962755574104288}
+@nix {"action":"result","fields":[2,4,0,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-18439.drv","",1,1],"id":962755574104289,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-18439.drv'","type":105}
+@nix {"action":"result","fields":[2,4,1,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":["building c"],"id":962755574104289,"type":101}
+@nix {"action":"result","fields":["c step 1"],"id":962755574104289,"type":101}
+@nix {"action":"result","fields":["c step 2"],"id":962755574104289,"type":101}
+@nix {"action":"result","fields":["c step 3"],"id":962755574104289,"type":101}
+@nix {"action":"stop","id":962755574104289}
+@nix {"action":"result","fields":[3,4,0,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4-top-18439.drv","",1,1],"id":962755574104290,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4-top-18439.drv'","type":105}
+@nix {"action":"result","fields":[3,4,1,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":["building top"],"id":962755574104290,"type":101}
+@nix {"action":"result","fields":["top step 1"],"id":962755574104290,"type":101}
+@nix {"action":"result","fields":["top step 2"],"id":962755574104290,"type":101}
+@nix {"action":"result","fields":["top step 3"],"id":962755574104290,"type":101}
+@nix {"action":"stop","id":962755574104290}
+@nix {"action":"result","fields":[4,4,0,0],"id":962755574104282,"type":105}
+@nix {"action":"result","fields":[1,1,0,0],"id":962755574104283,"type":105}
+@nix {"action":"result","fields":[101,0],"id":962755574104281,"type":106}
+@nix {"action":"result","fields":[100,279592],"id":962755574104281,"type":106}
+@nix {"action":"stop","id":962755574104283}
+@nix {"action":"stop","id":962755574104282}
+@nix {"action":"stop","id":962755574104281}

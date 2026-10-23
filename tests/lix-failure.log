@@ -1,0 +1,66 @@
+@nix {"action":"start","id":966874447741078,"level":6,"parent":0,"text":"querying info about missing paths","type":0}
+@nix {"action":"stop","id":966874447741078}
+@nix {"action":"msg","level":3,"msg":"these \u001b[35;1m4\u001b[0m derivations will be built:"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-b-5863.drv"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2-a-5863.drv"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-5863.drv"}
+@nix {"action":"msg","level":3,"msg":"  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4-top-5863.drv"}
+@nix {"action":"start","id":966874447741143,"level":0,"parent":0,"text":"","type":102}
+@nix {"action":"start","id":966874447741144,"level":0,"parent":0,"text":"","type":104}
+@nix {"action":"start","id":966874447741145,"level":0,"parent":0,"text":"","type":103}
+@nix {"action":"result","fields":[0,1,0,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[0,4,0,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2-a-5863.drv","",1,1],"id":966874447741146,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2-a-5863.drv'","type":105}
+@nix {"action":"result","fields":[0,4,1,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-b-5863.drv","",1,1],"id":966874447741147,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-b-5863.drv'","type":105}
+@nix {"action":"result","fields":[0,4,2,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":["building a"],"id":966874447741146,"type":101}
+@nix {"action":"result","fields":["a step 1"],"id":966874447741146,"type":101}
+@nix {"action":"result","fields":["building b"],"id":966874447741147,"type":101}
+@nix {"action":"result","fields":["b step 1"],"id":966874447741147,"type":101}
+@nix {"action":"result","fields":["a step 2"],"id":966874447741146,"type":101}
+@nix {"action":"result","fields":["b step 2"],"id":966874447741147,"type":101}
+@nix {"action":"result","fields":["a step 3"],"id":966874447741146,"type":101}
+@nix {"action":"result","fields":["b step 3"],"id":966874447741147,"type":101}
+@nix {"action":"stop","id":966874447741146}
+@nix {"action":"result","fields":[1,4,1,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"stop","id":966874447741147}
+@nix {"action":"result","fields":[2,4,0,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"start","fields":["/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-5863.drv","",1,1],"id":966874447741148,"level":3,"parent":0,"text":"building '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-5863.drv'","type":105}
+@nix {"action":"result","fields":[2,4,1,0],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":["building c"],"id":966874447741148,"type":101}
+@nix {"action":"result","fields":["c step 1"],"id":966874447741148,"type":101}
+@nix {"action":"result","fields":["c step 2"],"id":966874447741148,"type":101}
+@nix {"action":"result","fields":["c step 3"],"id":966874447741148,"type":101}
+@nix {"action":"result","fields":["boom"],"id":966874447741148,"type":101}
+@nix {"action":"stop","id":966874447741148}
+@nix {"action":"msg","level":0,"msg":"\u001b[31;1merror:\u001b[0m builder for '\u001b[35;1m/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-5863.drv\u001b[0m' failed with exit code 3;\n       last 5 log lines:\n       > building c\n       > c step 1\n       > c step 2\n       > c step 3\n       > boom\n       For full logs, run:\n       \t\u001b[1mnix log /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3-c-5863.drv\u001b[0m"}
+@nix {"action":"result","fields":[2,3,0,1],"id":966874447741144,"type":105}
+@nix {"action":"result","fields":[0,0,0,0],"id":966874447741145,"type":105}
+@nix {"action":"result","fields":[101,0],"id":966874447741143,"type":106}
+@nix {"action":"result","fields":[100,0],"id":966874447741143,"type":106}
+@nix {"action":"stop","id":966874447741145}
+@nix {"action":"stop","id":966874447741144}
+@nix {"action":"stop","id":966874447741143}
+@nix {"action":"msg","column":null,"file":null,"level":0,"line":null,"msg":"\u001b[31;1merror:\u001b[0m \u001b[35;1m1\u001b[0m dependencies of derivation '\u001b[35;1m/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4-top-5863.drv\u001b[0m' failed to build","raw_msg":"\u001b[35;1m1\u001b[0m dependencies of derivation '\u001b[35;1m/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4-top-5863.drv\u001b[0m' failed to build"}

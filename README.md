@@ -54,17 +54,21 @@ inputs.tern-nom = {
 
 Put `inputs.tern-nom.packages.${system}.default` in your packages instead of `nix-output-monitor`.
 
-nh puts its own copy of nom on its `PATH`. To make nh use tern-nom, override nh:
+nh puts its own copy of nom on its `PATH`. To make nh use tern-nom, use the flake's `nh` package, for example as `programs.nh.package`:
 
 ```nix
-pkgs.nh.override { nix-output-monitor = inputs.tern-nom.packages.${system}.default; }
+programs.nh.package = inputs.tern-nom.packages.${system}.nh;
 ```
+
+It is nixpkgs' nh with tern-nom as its nom.
+In a Tern pane it also adds `--diff never` to `nh os|home|darwin <command>`, because the card shows the diff.
+Outside Tern, under a multiplexer, or when you pass `--diff` yourself, nh prints its own diff as usual.
 
 Under `nh os`, `nh home` and `nh darwin`, the card shows what the build changes against the running system or home-manager profile once the build ends.
 tern-nom runs [dix](https://github.com/faukah/dix), the tool nh uses for its own diff, with `--output json`.
 It finds the new closure through the `--out-link` of the `nix build` that nh runs beside it.
-The system's own packages are listed with their version before and after, with the part that changed highlighted, and their size change. Their dependencies are folded below them.
-nh still prints its text diff after the card. Pass `--diff never` to nh to see only the card.
+The table lists the system's own packages and every added or removed package, each with its version before and after, the part that changed highlighted, and its size change.
+Dependencies whose version or size changed are folded below it.
 
 ## Which commands draw a card
 

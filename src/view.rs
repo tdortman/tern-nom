@@ -894,7 +894,8 @@ fn package_table(packages: &[&Package], key: &str) -> Node {
 }
 
 /// What the build changes against the current system, like nh's dix diff:
-/// the system's own packages open, their dependencies folded.
+/// the system's own packages and everything added or removed open, the
+/// dependencies that only changed version or size folded.
 fn changes(state: &State) -> Option<Node> {
     let closure = state.closure.as_ref()?;
     // dix's order: changed, then added, then removed.
@@ -903,8 +904,10 @@ fn changes(state: &State) -> Option<Node> {
         "Removed" => 2,
         _ => 0,
     };
-    let mut picked: Vec<&Package> = closure.diffs.iter().filter(|p| p.selected()).collect();
-    let mut deps: Vec<&Package> = closure.diffs.iter().filter(|p| !p.selected()).collect();
+    let (mut picked, mut deps): (Vec<&Package>, Vec<&Package>) = closure
+        .diffs
+        .iter()
+        .partition(|p| p.selected() || matches!(p.status.as_str(), "Added" | "Removed"));
     picked.sort_by_key(rank);
     deps.sort_by_key(rank);
     let p = &closure.paths;
@@ -930,7 +933,7 @@ fn changes(state: &State) -> Option<Node> {
     if !deps.is_empty() {
         body.push(
             ui::section()
-                .head(format!("Dependencies · {}", deps.len()))
+                .head(format!("Updated dependencies · {}", deps.len()))
                 .collapsible(true)
                 .collapsed(true)
                 .key("deps")
@@ -995,8 +998,14 @@ mod tests {
         assert_eq!(split("8.12.36", "8.12.40"), ("8.12.", "36"));
         // `1.2` against `1.20` shares `1.2` but not a whole part.
         assert_eq!(split("1.2", "1.20"), ("1.", "2"));
-        assert_eq!(split("3.14.8-env ×7", "3.14.8-env ×8"), ("3.14.8-env ", "×7"));
-        assert_eq!(split("2026.10.22-27dcf5f", "2026.10.19-6bbf2c4"), ("2026.10.", "22-27dcf5f"));
+        assert_eq!(
+            split("3.14.8-env ×7", "3.14.8-env ×8"),
+            ("3.14.8-env ", "×7")
+        );
+        assert_eq!(
+            split("2026.10.22-27dcf5f", "2026.10.19-6bbf2c4"),
+            ("2026.10.", "22-27dcf5f")
+        );
         assert_eq!(split("1.0", "2.0"), ("", "1.0"));
     }
 

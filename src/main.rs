@@ -69,18 +69,22 @@ fn real_nom(args: &[String]) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Whether this runs in a Tern pane a card can draw in: Tern's variables
+/// set and no multiplexer, which would swallow the handshake.
+fn in_tern_pane() -> bool {
+    let set = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    // shortcut: no TSP over ssh (TERN_PANE isn't forwarded), revisit if builds run remotely.
+    std::env::var_os("TERN_TSP").is_none_or(|v| v != "0")
+        && !set("TMUX")
+        && !set("STY")
+        && !set("ZELLIJ")
+        && (set("TERN_PANE") || std::env::var_os("TERM_PROGRAM").is_some_and(|v| v == "tern"))
+}
+
 /// A Tern session on the controlling terminal, when there is one.
 fn connect() -> Option<Session<Msg>> {
-    let set = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
-    // Multiplexers swallow the handshake; outside a Tern pane it would only
-    // cost the handshake timeout.
-    // shortcut: no TSP over ssh (TERN_PANE isn't forwarded), revisit if builds run remotely.
-    if std::env::var_os("TERN_TSP").is_some_and(|v| v == "0")
-        || set("TMUX")
-        || set("STY")
-        || set("ZELLIJ")
-        || !(set("TERN_PANE") || std::env::var_os("TERM_PROGRAM").is_some_and(|v| v == "tern"))
-    {
+    // Outside a Tern pane the handshake would only cost its timeout.
+    if !in_tern_pane() {
         return None;
     }
     let tty = tty::DevTty::open().ok()?;
@@ -91,6 +95,31 @@ fn connect() -> Option<Session<Msg>> {
         .kitty_keyboard(false)
         .timeout(Duration::from_millis(500));
     Session::with_terminal(tty, options).ok().flatten()
+}
+
+/// `nom --nh <nh> <args>`, installed as `nh`: runs nh, and in a Tern pane
+/// adds `--diff never` to `nh os|home|darwin <verb>`, whose package diff
+/// the card draws.
+fn nh(real: &str, args: &[String]) -> ExitCode {
+    let mut args = args.to_vec();
+    let chose = args
+        .iter()
+        .any(|a| a == "--diff" || a == "-d" || a.starts_with("--diff="));
+    if in_tern_pane() && !chose {
+        let at = args.windows(2).position(|w| {
+            matches!(w[0].as_str(), "os" | "home" | "darwin")
+                && matches!(
+                    w[1].as_str(),
+                    "switch" | "boot" | "test" | "build" | "build-vm"
+                )
+        });
+        if let Some(i) = at {
+            args.splice(i + 2..i + 2, ["--diff".to_owned(), "never".to_owned()]);
+        }
+    }
+    let err = Command::new(real).arg0("nh").args(&args).exec();
+    eprintln!("tern-nom: cannot run nh: {err}");
+    ExitCode::FAILURE
 }
 
 /// The command line of this process's parent (`nh os switch`), for the
@@ -113,7 +142,8 @@ fn parent_command() -> Option<String> {
         title.push(' ');
         title.push_str(arg);
     }
-    Some(title)
+    // What the `nh` wrapper added is not what was typed.
+    Some(title.replace(" --diff never", ""))
 }
 
 /// Streams `input` line by line into `tx`.
@@ -383,6 +413,7 @@ fn main() -> ExitCode {
     // `nom develop`/`nom shell` build in a card, then run nix for real.
     let mut then = None;
     let source = match args.first().map(String::as_str) {
+        Some("--nh") if args.len() >= 2 => return nh(&args[1], &args[2..]),
         Some("build" | "copy" | "flake") if !help => Source::Spawn(args.clone()),
         Some("develop" | "shell") if !help => {
             then = Some(args.clone());

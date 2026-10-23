@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use tern_sdk::{
     nodes,
-    ui::{self, Bound, Extent, Node, Status, TreeItem, View},
+    ui::{self, Bound, Extent, Status, TreeItem},
 };
 
 use crate::{
@@ -12,19 +12,31 @@ use crate::{
     state::{Counts, DepNode, DrvStatus, Outcome, Severity, State},
 };
 
+/// What a click on the card asks for.
+#[derive(Clone, Debug)]
+pub enum Msg {
+    /// Shows or hides this `.drv`'s log.
+    ToggleLog(String),
+}
+
+type Node = ui::Node<Msg>;
+type View = ui::View<Msg>;
+
 /// Running builds or copies listed before the rest fold into "+N more".
 const ROWS: usize = 8;
 
 /// Build log lines sent to the window.
 const LOG_TAIL: usize = 60;
 
-/// `bytes` as MiB/GiB.
+/// `bytes` as KiB/MiB/GiB.
 fn size(bytes: u64) -> String {
-    let mib = bytes as f64 / (1024.0 * 1024.0);
-    if mib >= 1024.0 {
-        format!("{:.2} GiB", mib / 1024.0)
+    let kib = bytes as f64 / 1024.0;
+    if kib < 1024.0 {
+        format!("{kib:.0} KiB")
+    } else if kib < 1024.0 * 1024.0 {
+        format!("{:.1} MiB", kib / 1024.0)
     } else {
-        format!("{mib:.1} MiB")
+        format!("{:.2} GiB", kib / (1024.0 * 1024.0))
     }
 }
 
@@ -81,16 +93,19 @@ fn summary(state: &State) -> Node {
     let mut row: Vec<Node> = Vec::new();
     match state.outcome {
         None => {
-            let label = state
-                .activity
-                .as_deref()
-                .unwrap_or(if !state.builds.is_empty() {
-                    "Building"
-                } else if !state.copies.is_empty() {
-                    "Fetching"
-                } else {
-                    "Evaluating"
-                });
+            let label = state.activity.as_deref().map_or_else(
+                || {
+                    if !state.builds.is_empty() {
+                        "Building"
+                    } else if !state.copies.is_empty() {
+                        "Fetching"
+                    } else {
+                        "Evaluating"
+                    }
+                    .to_owned()
+                },
+                shorten,
+            );
             row.push(
                 ui::spinner()
                     .style("dots")
@@ -155,8 +170,9 @@ fn summary(state: &State) -> Node {
         .into()
 }
 
-/// One row per running build: name, phase, last line, timer.
-fn running_builds(state: &State) -> Option<Node> {
+/// One row per running build: name, phase, last line, timer. A click shows
+/// the build's log under its row.
+fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
     if state.builds.is_empty() {
         return None;
     }
@@ -217,14 +233,39 @@ fn running_builds(state: &State) -> Option<Node> {
                 timer.stopped(u64::try_from(state.started_ago(id).as_millis()).unwrap_or(u64::MAX));
         }
         row.push(timer.key("t").into());
-        rows.push(
-            ui::row()
-                .gap("sm")
-                .align("center")
-                .key(id.to_string())
-                .children(row)
-                .into(),
-        );
+        let shown = open == Some(b.drv.as_str());
+        let mut node = ui::row()
+            .gap("sm")
+            .align("center")
+            .key(id.to_string())
+            .title(if shown {
+                "Hide the log"
+            } else {
+                "Show the log"
+            })
+            .on_click(Msg::ToggleLog(b.drv.clone()))
+            .children(row);
+        if shown {
+            node = node.mark("pick");
+        }
+        rows.push(node.into());
+        if shown {
+            let lines = state.logs.get(&b.drv);
+            let skip = lines.map_or(0, |l| l.len().saturating_sub(LOG_TAIL));
+            let text: String = lines
+                .into_iter()
+                .flatten()
+                .skip(skip)
+                .map(|l| format!("{l}\x1b[0m\r\n"))
+                .collect();
+            rows.push(
+                ui::ansi(text)
+                    .follow(true)
+                    .max(Bound::h(Extent::Lines(12.0)))
+                    .key(format!("{id}.log"))
+                    .into(),
+            );
+        }
     }
     if state.builds.len() > ROWS {
         rows.push(
@@ -285,23 +326,34 @@ fn running_copies(state: &State) -> Option<Node> {
     Some(ui::col().key("copies").children(rows).into())
 }
 
-/// The overall progress bar over builds and copies, while builds run; with
-/// only copies the download bar shows the same in bytes.
+/// Builds as one bar, beside the download bar for fetched paths: nix fetches
+/// and builds at the same time, so the two never share a bar.
 fn progress(state: &State) -> Option<Node> {
     if state.outcome.is_some() {
         return None;
     }
     let b = state.build_counts();
-    let c = state.copy_counts();
-    let expected = b.expected + c.expected;
-    if b.expected == 0 || expected == 0 {
+    if b.expected == 0 {
         return None;
     }
-    let done = b.done + b.failed + c.done;
+    let mut label = format!("{}/{} built", b.done, b.expected);
+    if b.running > 0 {
+        label.push_str(&format!(" · {} running", b.running));
+    }
     Some(
-        ui::progress()
-            .value(done as f64 / expected as f64)
+        ui::row()
+            .gap("sm")
+            .align("center")
             .key("bar")
+            .children(nodes![
+                ui::icon("wrench").tone("accent").key("i"),
+                ui::progress()
+                    .value((b.done + b.failed) as f64 / b.expected as f64)
+                    .label(label)
+                    .tone("accent")
+                    .grow(1.0)
+                    .key("b"),
+            ])
             .into(),
     )
 }
@@ -317,7 +369,7 @@ fn downloads(state: &State) -> Option<Node> {
     }
     let paths = state.copy_counts();
     let label = format!(
-        "{} / {} · {}/{} paths",
+        "{} / {} · {}/{} fetched",
         size(done),
         size(total),
         paths.done,
@@ -656,30 +708,20 @@ fn fetched(state: &State) -> Option<Node> {
     )
 }
 
-/// The output of the build that printed last, without name prefixes.
-fn log(state: &State) -> Option<Node> {
-    let key = state.last_log.as_str();
-    let lines = state.logs.get(key).filter(|l| !l.is_empty())?;
-    // A failed build's log is already in its failure block.
-    if state.status(key) == DrvStatus::Failed {
-        return None;
-    }
+/// Output nix printed outside any build, folded.
+fn output(state: &State) -> Option<Node> {
+    let lines = state.logs.get("").filter(|l| !l.is_empty())?;
     let skip = lines.len().saturating_sub(LOG_TAIL);
     let text: String = lines
         .iter()
         .skip(skip)
         .map(|l| format!("{l}\x1b[0m\r\n"))
         .collect();
-    let head = if key.is_empty() {
-        "Output".to_owned()
-    } else {
-        format!("Log · {}", store_name(key))
-    };
     Some(
         ui::section()
-            .head(head)
+            .head("Output")
             .collapsible(true)
-            .collapsed(state.outcome.is_some())
+            .collapsed(true)
             .key("log")
             .child(
                 ui::ansi(text)
@@ -691,8 +733,8 @@ fn log(state: &State) -> Option<Node> {
     )
 }
 
-/// The whole card.
-pub fn view(state: &State, title: &str) -> View {
+/// The whole card; `open` is the `.drv` whose log the user opened.
+pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
     let status = match state.outcome {
         None => Status::Running,
         Some((Outcome::Done, _)) => Status::Done,
@@ -702,13 +744,13 @@ pub fn view(state: &State, title: &str) -> View {
     let mut body: Vec<Node> = vec![summary(state)];
     body.extend(progress(state));
     body.extend(downloads(state));
-    body.extend(running_builds(state));
+    body.extend(running_builds(state, open));
     body.extend(running_copies(state));
     body.extend(errors(state));
     body.extend(deps(state));
     body.extend(warnings(state));
     body.extend(fetched(state));
-    body.extend(log(state));
+    body.extend(output(state));
     View::new().main([ui::card()
         .head(ui::span(title).style("mono"))
         .status(status)

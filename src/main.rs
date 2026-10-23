@@ -24,7 +24,8 @@ use std::{
 };
 
 use state::{Outcome, State};
-use tern_sdk::{Options, Session, SurfaceOptions};
+use tern_sdk::{Input, Options, Session, SurfaceOptions};
+use view::Msg;
 
 /// How often the card is redrawn while output arrives.
 const FRAME: Duration = Duration::from_millis(100);
@@ -62,7 +63,7 @@ fn real_nom(args: &[String]) -> ExitCode {
 }
 
 /// A Tern session on the controlling terminal, when there is one.
-fn connect() -> Option<Session> {
+fn connect() -> Option<Session<Msg>> {
     let set = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
     // Multiplexers swallow the handshake; outside a Tern pane it would only
     // cost the handshake timeout.
@@ -133,7 +134,7 @@ fn pump_lines(input: impl Read + Send + 'static, tx: mpsc::Sender<nix::Line>) {
 
 /// Monitors `source` on `session`; the process's exit code.
 fn monitor(
-    mut session: Session,
+    mut session: Session<Msg>,
     source: Source,
     title: String,
 ) -> Result<ExitCode, tern_sdk::Error> {
@@ -171,7 +172,9 @@ fn monitor(
     let sf = session.open(SurfaceOptions::flow().title(title.clone()))?;
     let reader: state::DrvReader = Box::new(|path| std::fs::read_to_string(path).ok());
     let mut state = State::new(history::History::load(), reader);
-    session.render(sf, view::view(&state, &title))?;
+    // The `.drv` whose log the user opened by clicking its row.
+    let mut open: Option<String> = None;
+    session.render(sf, view::view(&state, &title, None))?;
     let mut last = Instant::now();
     let mut dirty = false;
     loop {
@@ -179,8 +182,17 @@ fn monitor(
             state.finish(Outcome::Cancelled);
             break;
         }
-        // Keys and events are not used; reading lets acks free frames.
-        session.next(Some(POLL))?;
+        // A click on a running build opens or closes its log; reading also
+        // lets acks free frames.
+        if let Some(Input::Msg(Msg::ToggleLog(drv), _)) = session.next(Some(POLL))? {
+            open = if open.as_deref() == Some(drv.as_str()) {
+                None
+            } else {
+                Some(drv)
+            };
+            session.render(sf, view::view(&state, &title, open.as_deref()))?;
+            last = Instant::now();
+        }
         let ended = loop {
             // What nix logs while it dies (builds stopping) is not progress.
             if INTERRUPTED.load(Ordering::Relaxed) {
@@ -201,7 +213,7 @@ fn monitor(
         // Tree timers and estimate bars are text, so redraw while builds run.
         let tick = !state.builds.is_empty() && last.elapsed() >= TICK;
         if (dirty && last.elapsed() >= FRAME) || tick {
-            session.render(sf, view::view(&state, &title))?;
+            session.render(sf, view::view(&state, &title, open.as_deref()))?;
             last = Instant::now();
             dirty = false;
         }
@@ -213,7 +225,7 @@ fn monitor(
         let ok = status.is_none_or(|s| s.success());
         state.finish(if ok { Outcome::Done } else { Outcome::Failed });
     }
-    session.render(sf, view::view(&state, &title))?;
+    session.render(sf, view::view(&state, &title, open.as_deref()))?;
     session.close()?;
     if let Err(e) = state.history.save() {
         eprintln!("tern-nom: cannot save build times to nom's history: {e}");

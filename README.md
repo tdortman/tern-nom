@@ -7,7 +7,7 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 
 ## What the card shows
 
-- Built and fetched counts, an overall progress bar, and a timer.
+- Built and fetched counts, a timer, and a progress bar for builds.
 - A download bar over all paths fetched from caches, and one bar per path being fetched.
 - One row per running build, with its stdenv phase, its last output line, and how long it has run.
   If nom has timed the same package before, the row also has a progress bar against that estimate.
@@ -19,8 +19,9 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 - Warnings in a folded section, one line each.
   A warning nix prints several times shows once with a count, store paths are cut down to the package name, and quoted option names show as code.
 - The paths fetched from caches, in a folded section.
-- The log of the build that printed last, without a prefix on every line.
-  It folds once the job ends, and a failed build's log moves into its failure block.
+- Build logs stay hidden. Click a running build's row to show its log under the row, and click again to hide it.
+  A failed build's log is always shown in its failure block.
+  Output nix prints outside any build sits in a folded section.
 
 Ctrl+C stops nix as usual. The card then reads Cancelled and `nom` exits with 130.
 

@@ -193,8 +193,6 @@ pub struct State {
     /// Each build's output by `.drv` path; `""` holds output from outside
     /// builds.
     pub logs: HashMap<String, VecDeque<String>>,
-    /// The key of the log that last printed.
-    pub last_log: String,
     /// What nix does outside builds and copies (evaluation, queries).
     pub activity: Option<String>,
     /// The id of the activity `activity` describes.
@@ -237,7 +235,6 @@ impl State {
             failed_drvs: HashSet::new(),
             notes: Vec::new(),
             logs: HashMap::new(),
-            last_log: String::new(),
             activity: None,
             activity_id: 0,
             started: Instant::now(),
@@ -491,9 +488,6 @@ impl State {
             log.pop_front();
         }
         log.push_back(line);
-        if self.last_log != key {
-            key.clone_into(&mut self.last_log);
-        }
     }
 
     /// Build counts: from the plan and what was seen when nix listed one,

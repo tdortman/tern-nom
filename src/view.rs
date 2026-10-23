@@ -23,26 +23,23 @@ pub enum Msg {
     OpenFile(String),
 }
 
-/// A link to `drv`'s whole log file. A click opens it while nom runs, and
-/// Tern opens the link itself on Ctrl/⌘-click, also after nom exited.
+/// A link to `drv`'s whole log file. A click opens it while nom runs; after
+/// nom exited, Tern opens it itself on ⌘-click or from its context menu.
 fn full_log(state: &State, drv: &str, key: &str) -> Option<Node> {
-    let (path, lines) = state.full_logs.as_ref()?.get(drv)?;
+    let path = state.full_logs.as_ref()?.get(drv)?;
     let path = path.to_string_lossy().into_owned();
     Some(
-        ui::text(vec![
-            ui::span("Full log").style("link"),
-            ui::span(format!(" · {lines} lines, searchable")).style("muted"),
-        ])
-        .href(format!("file://{path}"))
-        .on_click(Msg::OpenFile(path))
-        .key(key)
-        .into(),
+        ui::text(ui::span("Full log").style("link"))
+            .href(format!("file://{path}"))
+            .on_click(Msg::OpenFile(path))
+            .key(key)
+            .into(),
     )
 }
 
 /// `drv`'s log file as a link target, once it printed.
 fn log_href(state: &State, drv: &str) -> Option<String> {
-    let (path, _) = state.full_logs.as_ref()?.get(drv)?;
+    let path = state.full_logs.as_ref()?.get(drv)?;
     Some(format!("file://{}", path.display()))
 }
 
@@ -199,7 +196,7 @@ fn summary(state: &State) -> Node {
 }
 
 /// Everything nix did outside builds, copies and inputs, as a log: its last
-/// line while nix runs, which expands to the rest; folded once it ends.
+/// lines while nix runs, then folded with a link to all of it in a file.
 fn activity(state: &State) -> Option<Node> {
     if state.activity_log.is_empty() {
         return None;
@@ -207,23 +204,27 @@ fn activity(state: &State) -> Option<Node> {
     // Faint like the rest of the card's secondary text; store paths cut
     // down to the package name, line by line so the text only grows.
     let text = format!("\x1b[2m{}", shorten(&state.activity_log));
+    // Tern clips an `ansi` box instead of scrolling it, so the box shows
+    // the tail and the file block has the rest. No preview: its fade would
+    // cover the top lines.
+    let tail = if state.outcome.is_none() { 4.0 } else { 12.0 };
     let log = ui::ansi(text)
         .follow(true)
-        .max(Bound::h(Extent::Lines(12.0)))
+        .max(Bound::h(Extent::Lines(tail)))
         .key("log");
     if state.outcome.is_none() {
-        // Tern fades the top line of a following preview, so the current
-        // activity needs one above it to stay readable.
-        return Some(log.preview(2).key("activity").into());
+        return Some(log.key("activity").into());
     }
     let lines = state.activity_log.matches("\r\n").count();
+    let mut body: Vec<Node> = vec![log.into()];
+    body.extend(full_log(state, crate::logs::ACTIVITY, "full"));
     Some(
         ui::section()
             .head(format!("Activity · {lines}"))
             .collapsible(true)
             .collapsed(true)
             .key("activity")
-            .child(log)
+            .children(body)
             .into(),
     )
 }

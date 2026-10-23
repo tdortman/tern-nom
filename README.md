@@ -9,7 +9,7 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 
 - Built and fetched counts, and a timer.
 - What nix does besides builds and downloads, such as evaluating or querying caches, as a log under the counts.
-  While nix runs, the log shows its last two lines and can be expanded. Once the run ends, it folds into one line that can be opened.
+  While nix runs, the log shows its last four lines. Once the run ends, it folds into one line that opens to its last 12 lines and a "Full log" link to all of it.
 - At the bottom, a progress bar for builds and a download bar over all paths fetched from caches.
 - One row per running build, with its stdenv phase, its last output line, and how long it has run.
   If nom has timed the same package before, the row also has a progress bar against that estimate.
@@ -29,13 +29,13 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
   A nested input's parent path and a `follows` are dimmed, so the input's own name stands out.
 - The paths fetched from caches, in a folded section.
 - Build logs stay hidden. Click a running build's row to show the last 8 lines of its log under the row, and click again to hide it.
-  The button above those lines expands them to the last 400 lines, in a box 30 lines tall that scrolls.
+  The button above those lines expands them to the last 30 lines.
   A failed build's log is always shown in its failure block.
 - Output nix prints outside any build, in a folded section.
-- Every build's whole log, without colors, in `$XDG_CACHE_HOME/tern-nom/logs`, one directory per run, keeping the last 10 runs.
-  Click "Full log" under an open log or a failure to open the file in a Tern file block, where Tern's search finds any line.
+- Every build's whole log and nix's activity log, without colors, in `$XDG_CACHE_HOME/tern-nom/logs`, one directory per run, keeping the last 10 runs.
+  Click "Full log" under an open log, a failure or the activity log to open the file in a Tern file block, where Tern's search finds any line.
   The block reloads as the build prints.
-  After the run, Ctrl+click (⌘-click on macOS) a derivation's name in the tree to open its log.
+  After `nom` exits, a plain click no longer opens the log. Instead, ⌘-click the link or a derivation's name in the tree, or right-click it and choose Open file.
 
 Ctrl+C stops nix as usual. The card then reads Cancelled and `nom` exits with 130.
 

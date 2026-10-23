@@ -665,8 +665,12 @@ impl State {
             .map_or(Duration::ZERO, Instant::elapsed)
     }
 
-    /// Adds a line to the activity log; tern-nom's own steps go there too.
+    /// Adds a line to the activity log and its file; tern-nom's own steps
+    /// go there too.
     pub fn log_activity(&mut self, text: &str) {
+        if let Some(logs) = &mut self.full_logs {
+            logs.write(crate::logs::ACTIVITY, text);
+        }
         self.activity_log.push_str(text);
         self.activity_log.push_str("\r\n");
     }

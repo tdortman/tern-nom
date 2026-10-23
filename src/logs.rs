@@ -13,12 +13,14 @@ use crate::nix::{store_name, strip_ansi};
 /// Runs whose logs are kept, the newest first.
 const RUNS: usize = 10;
 
+/// The key of nix's activity log among the build logs.
+pub const ACTIVITY: &str = "activity";
+
 /// One build's log file.
 struct LogFile {
     path: PathBuf,
     /// Open while the build prints; reopened to append if it prints again.
     out: Option<BufWriter<File>>,
-    lines: usize,
 }
 
 /// This run's log files, by `.drv` path.
@@ -67,14 +69,8 @@ impl Logs {
                     .dir
                     .join(format!("{name}-{}.log", hash.get(..7).unwrap_or(hash)));
             }
-            self.files.insert(
-                drv.to_owned(),
-                LogFile {
-                    path,
-                    out: None,
-                    lines: 0,
-                },
-            );
+            self.files
+                .insert(drv.to_owned(), LogFile { path, out: None });
         }
         let Some(file) = self.files.get_mut(drv) else {
             return;
@@ -87,12 +83,10 @@ impl Logs {
                 .ok()
                 .map(BufWriter::new);
         }
-        if let Some(out) = &mut file.out {
-            if writeln!(out, "{}", strip_ansi(line)).is_err() {
-                file.out = None;
-                return;
-            }
-            file.lines += 1;
+        if let Some(out) = &mut file.out
+            && writeln!(out, "{}", strip_ansi(line)).is_err()
+        {
+            file.out = None;
         }
     }
 
@@ -112,8 +106,8 @@ impl Logs {
         }
     }
 
-    /// `drv`'s log file and its line count, once it printed.
-    pub fn get(&self, drv: &str) -> Option<(&Path, usize)> {
-        self.files.get(drv).map(|f| (f.path.as_path(), f.lines))
+    /// `drv`'s log file, once it printed.
+    pub fn get(&self, drv: &str) -> Option<&Path> {
+        self.files.get(drv).map(|f| f.path.as_path())
     }
 }

@@ -63,7 +63,7 @@ pkgs.nh.override { nix-output-monitor = inputs.tern-nom.packages.${system}.defau
 Under `nh os`, `nh home` and `nh darwin`, the card shows what the build changes against the running system or home-manager profile once the build ends.
 tern-nom runs [dix](https://github.com/faukah/dix), the tool nh uses for its own diff, with `--output json`.
 It finds the new closure through the `--out-link` of the `nix build` that nh runs beside it.
-The system's own packages are listed with their old and new versions and size change, and their dependencies are folded below them.
+The system's own packages are listed with their version before and after, with the part that changed highlighted, and their size change. Their dependencies are folded below them.
 nh still prints its text diff after the card. Pass `--diff never` to nh to see only the card.
 
 ## Which commands draw a card
@@ -72,8 +72,11 @@ nh still prints its text diff after the card. Pass `--diff never` to nh to see o
 | --- | --- |
 | `nom build`, `nom copy`, `nom flake` | Card. tern-nom runs `nix` with `-v --log-format internal-json`. |
 | `nom flake metadata`, `nom flake show` | Card with the flake's fields and inputs, or its outputs, as trees. tern-nom adds `--json` and draws the result. Piped into another program, or given `--json`, nix's own output goes to stdout as usual. |
-| `nom --json` | Card. tern-nom reads nix's log from stdin. nh runs nom this way. |
-| `nom shell`, `nom develop`, plain `nom`, `nom-build`, `nom-shell` | The real `nom`. |
+| `nom develop`, `nom shell` | Card while nix builds the environment, then `nix develop` or `nix shell` with the same arguments, as nom does. |
+| `nom --json` | Card. tern-nom reads nix's log from stdin. nh runs nom this way, and so does a direnv `use flake … 2> >(nom --json >&2)`. |
+| plain `nom`, `nom-build`, `nom-shell` | The real `nom`. |
+
+Piped into `nom --json`, the card shows once nix builds, fetches, or has run for a second. A direnv reload that finds everything cached leaves no card behind. Under direnv, the card is titled with the project directory.
 
 The card draws only if all of these are true:
 

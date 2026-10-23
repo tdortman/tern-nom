@@ -599,6 +599,17 @@ impl State {
             .map_or(Duration::ZERO, Instant::elapsed)
     }
 
+    /// Whether a finished run that never showed a card has anything to say:
+    /// builds, downloads, warnings, errors, a lock file change or a diff.
+    pub fn worth_showing(&self) -> bool {
+        !matches!(self.outcome, Some((Outcome::Done, _)))
+            || !self.built.is_empty()
+            || !self.copied.is_empty()
+            || self.notes.iter().any(|n| n.severity != Severity::Info)
+            || !self.lock_changes.is_empty()
+            || self.closure.is_some()
+    }
+
     /// Ends the invocation; `success` is what the caller knows (nix's exit
     /// status), combined with failures seen in the log.
     pub fn finish(&mut self, outcome: Outcome) {

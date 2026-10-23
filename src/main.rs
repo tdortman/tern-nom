@@ -17,6 +17,7 @@ mod view;
 use std::{
     io::{self, BufRead as _, BufReader, Read, Write as _},
     os::unix::process::CommandExt as _,
+    path::Path,
     process::{Command, ExitCode, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -27,7 +28,7 @@ use std::{
 };
 
 use state::{Outcome, State};
-use tern_sdk::{Input, Options, Session, SurfaceOptions};
+use tern_sdk::{Input, Options, Session, Surface, SurfaceOptions, ui::View};
 use view::Msg;
 
 /// How often the card is redrawn while output arrives.
@@ -38,6 +39,9 @@ const POLL: Duration = Duration::from_millis(30);
 
 /// How often running builds' timers and estimates are redrawn.
 const TICK: Duration = Duration::from_secs(1);
+
+/// How long piped input may run before its card shows without a build.
+const QUIET: Duration = Duration::from_secs(1);
 
 /// Set by SIGINT/SIGTERM.
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -90,9 +94,20 @@ fn connect() -> Option<Session<Msg>> {
 }
 
 /// The command line of this process's parent (`nh os switch`), for the
-/// card's title under a pipe.
+/// card's title under a pipe; direnv's long stdlib call reads as
+/// `direnv ~/project`.
 fn parent_command() -> Option<String> {
     let args = diff::cmdline(std::os::unix::process::parent_id())?;
+    if let Some(envrc) = args.iter().find_map(|a| a.split_once("source_env ")) {
+        let path = envrc.1.trim_start_matches('$').trim_matches('\'');
+        let dir = Path::new(path).parent().unwrap_or(Path::new(path));
+        let dir = dir.to_string_lossy();
+        let home = std::env::var("HOME").unwrap_or_default();
+        return Some(match dir.strip_prefix(&home) {
+            Some(rest) if !home.is_empty() => format!("direnv ~{rest}"),
+            _ => format!("direnv {dir}"),
+        });
+    }
     let mut title = diff::program(&args)?.to_owned();
     for arg in &args[1..] {
         title.push(' ');
@@ -136,12 +151,29 @@ fn open_in_tern(path: &str) {
     }
 }
 
+/// Draws `view`, opening the card's surface on first use.
+fn draw(
+    session: &mut Session<Msg>,
+    sf: &mut Option<Surface>,
+    title: &str,
+    view: View<Msg>,
+) -> Result<(), tern_sdk::Error> {
+    let surface = match *sf {
+        Some(s) => s,
+        None => *sf.insert(session.open(SurfaceOptions::flow().title(title.to_owned()))?),
+    };
+    session.render(surface, view)
+}
+
 /// Monitors `source` on `session`; the process's exit code.
 fn monitor(
     mut session: Session<Msg>,
     source: Source,
     title: String,
 ) -> Result<ExitCode, tern_sdk::Error> {
+    // A pipe (direnv, nh) shows a card once nix does something worth one, so
+    // a cached reload stays quiet; a typed command shows one at once.
+    let eager = matches!(source, Source::Spawn(_));
     let (tx, rx) = mpsc::channel();
     let mut child = None;
     let mut stdout = None;
@@ -194,13 +226,20 @@ fn monitor(
         }
     }
 
-    let sf = session.open(SurfaceOptions::flow().title(title.clone()))?;
+    let mut sf: Option<Surface> = None;
     let reader: state::DrvReader = Box::new(|path| std::fs::read_to_string(path).ok());
     let mut state = State::new(history::History::load(), reader);
     state.full_logs = logs::Logs::create();
     // The `.drv` whose log the user opened by clicking its row.
     let mut open: Option<String> = None;
-    session.render(sf, view::view(&state, &title, None))?;
+    if eager {
+        draw(
+            &mut session,
+            &mut sf,
+            &title,
+            view::view(&state, &title, None),
+        )?;
+    }
     let mut last = Instant::now();
     let mut dirty = false;
     loop {
@@ -217,7 +256,12 @@ fn monitor(
                 } else {
                     Some(drv)
                 };
-                session.render(sf, view::view(&state, &title, open.as_deref()))?;
+                draw(
+                    &mut session,
+                    &mut sf,
+                    &title,
+                    view::view(&state, &title, open.as_deref()),
+                )?;
                 last = Instant::now();
             }
             Some(Input::Msg(Msg::OpenFile(path), _)) => {
@@ -248,11 +292,20 @@ fn monitor(
         // Timers and estimate bars are text, and rows appear after a second,
         // so redraw while builds or copies run.
         let tick = !(state.builds.is_empty() && state.copies.is_empty()) && last.elapsed() >= TICK;
-        if (dirty && last.elapsed() >= FRAME) || tick {
+        let shown = sf.is_some()
+            || !state.builds.is_empty()
+            || !state.copies.is_empty()
+            || state.started.elapsed() >= QUIET;
+        if shown && ((dirty && last.elapsed() >= FRAME) || tick) {
             if let Some(logs) = &mut state.full_logs {
                 logs.flush();
             }
-            session.render(sf, view::view(&state, &title, open.as_deref()))?;
+            draw(
+                &mut session,
+                &mut sf,
+                &title,
+                view::view(&state, &title, open.as_deref()),
+            )?;
             last = Instant::now();
             dirty = false;
         }
@@ -272,7 +325,12 @@ fn monitor(
         let ok = status.is_none_or(|s| s.success());
         if let Some(target) = compare.as_ref().filter(|_| ok) {
             state.activity = Some("Comparing with the current system".to_owned());
-            session.render(sf, view::view(&state, &title, open.as_deref()))?;
+            draw(
+                &mut session,
+                &mut sf,
+                &title,
+                view::view(&state, &title, open.as_deref()),
+            )?;
             state.closure = target.diff(started);
             state.activity = None;
         }
@@ -281,7 +339,14 @@ fn monitor(
     if let Some(logs) = &mut state.full_logs {
         logs.flush();
     }
-    session.render(sf, view::view(&state, &title, open.as_deref()))?;
+    if sf.is_some() || state.worth_showing() {
+        draw(
+            &mut session,
+            &mut sf,
+            &title,
+            view::view(&state, &title, open.as_deref()),
+        )?;
+    }
     session.close()?;
     if let Err(e) = state.history.save() {
         eprintln!("tern-nom: cannot save build times to nom's history: {e}");
@@ -300,11 +365,28 @@ fn monitor(
     })
 }
 
+/// `args` (`develop …`/`shell …`) only building the environment, as nom
+/// does: anything from `--command` on becomes `--command sh -c exit`.
+fn build_only(args: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = args
+        .iter()
+        .take_while(|a| *a != "--command" && *a != "-c")
+        .cloned()
+        .collect();
+    out.extend(["--command", "sh", "-c", "exit"].map(String::from));
+    out
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let help = args.iter().any(|a| a == "--help");
+    // `nom develop`/`nom shell` build in a card, then run nix for real.
+    let mut then = None;
     let source = match args.first().map(String::as_str) {
-        Some("build" | "copy" | "flake") if !args.iter().any(|a| a == "--help") => {
-            Source::Spawn(args.clone())
+        Some("build" | "copy" | "flake") if !help => Source::Spawn(args.clone()),
+        Some("develop" | "shell") if !help => {
+            then = Some(args.clone());
+            Source::Spawn(build_only(&args))
         }
         Some("--json") if args.len() == 1 => Source::Stdin,
         _ => return real_nom(&args),
@@ -318,14 +400,27 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
     }
     let title = match &source {
-        Source::Spawn(a) => format!("nom {}", a.join(" ")),
+        Source::Spawn(_) => format!("nom {}", args.join(" ")),
         Source::Stdin => parent_command().unwrap_or_else(|| "nix".to_owned()),
     };
-    match monitor(session, source, title) {
+    let code = match monitor(session, source, title) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("tern-nom: {e}");
             ExitCode::FAILURE
         }
+    };
+    match then {
+        Some(nix_args) if code == ExitCode::SUCCESS => {
+            // SAFETY: restoring the default action has no preconditions.
+            unsafe {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                libc::signal(libc::SIGTERM, libc::SIG_DFL);
+            }
+            let err = Command::new("nix").args(nix_args).exec();
+            eprintln!("tern-nom: cannot run nix: {err}");
+            ExitCode::FAILURE
+        }
+        _ => code,
     }
 }

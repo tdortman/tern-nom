@@ -820,18 +820,56 @@ fn signed_size(bytes: i64) -> String {
     format!("{sign}{}", size(bytes.unsigned_abs()))
 }
 
-/// Packages as a table: status, name, versions before and after, size.
+/// How many leading bytes `a` and `b` share, ending after a `.`, `-` or `_`
+/// so a version is split between its parts, never inside a number.
+fn shared_prefix(a: &str, b: &str) -> usize {
+    let mut last = 0;
+    for ((i, x), y) in a.char_indices().zip(b.chars()) {
+        if x != y {
+            break;
+        }
+        if matches!(x, '.' | '-' | '_' | ' ') {
+            last = i + 1;
+        }
+    }
+    last
+}
+
+/// One side of a version change: the part both sides share dimmed, the
+/// rest in `tone`.
+fn version_cell(this: &str, other: &str, tone: &str) -> Vec<ui::Span> {
+    if this.is_empty() {
+        return vec![ui::span("—").style("dim")];
+    }
+    let cut = if this == other {
+        this.len()
+    } else {
+        shared_prefix(this, other)
+    };
+    let (same, changed) = this.split_at(cut);
+    let mut spans = Vec::new();
+    if !same.is_empty() {
+        spans.push(ui::span(same).style("muted"));
+    }
+    if !changed.is_empty() {
+        spans.push(ui::span(changed).style(tone));
+    }
+    spans
+}
+
+/// Packages as a table: status, name, version before, version after, size.
 fn package_table(packages: &[&Package], key: &str) -> Node {
     let mut table = ui::table()
         .key(key)
         .col(Column::new("s", "").priority(1.0))
         .col(Column::new("n", "Package").truncate("end"))
         .col(
-            Column::new("v", "Version")
+            Column::new("o", "Before")
                 .grow(1.0)
                 .truncate("middle")
                 .priority(2.0),
         )
+        .col(Column::new("w", "After").grow(1.0).truncate("middle"))
         .col(Column::new("d", "Size").align("end").priority(3.0));
     for (i, p) in packages.iter().enumerate() {
         let (word, tone) = match p.status.as_str() {
@@ -843,22 +881,12 @@ fn package_table(packages: &[&Package], key: &str) -> Node {
             _ => ("changed", "muted"),
         };
         let (old, new) = p.versions();
-        let mut versions = Vec::new();
-        match (old.is_empty(), new.is_empty()) {
-            (false, false) => {
-                versions.push(ui::span(old).style("muted"));
-                versions.push(ui::span(" → ").style("dim"));
-                versions.push(ui::span(new));
-            }
-            (true, false) => versions.push(ui::span(new)),
-            (false, true) => versions.push(ui::span(old).style("del")),
-            (true, true) => {}
-        }
         table = table.row(
             TableRow::new(i.to_string())
                 .cell("s", ui::span(word).style(tone))
                 .cell("n", ui::span(&p.name).style("strong"))
-                .cell("v", versions)
+                .cell("o", version_cell(&old, &new, "del"))
+                .cell("w", version_cell(&new, &old, "ins"))
                 .cell("d", ui::span(signed_size(p.size_delta)).style("num")),
         );
     }
@@ -958,6 +986,19 @@ mod tests {
     use super::*;
 
     const HASH: &str = "8nk26gfn51s07v339n5lycablfkl5lj7";
+
+    #[test]
+    fn versions_split_between_parts() {
+        fn split<'a>(a: &'a str, b: &str) -> (&'a str, &'a str) {
+            a.split_at(shared_prefix(a, b))
+        }
+        assert_eq!(split("8.12.36", "8.12.40"), ("8.12.", "36"));
+        // `1.2` against `1.20` shares `1.2` but not a whole part.
+        assert_eq!(split("1.2", "1.20"), ("1.", "2"));
+        assert_eq!(split("3.14.8-env ×7", "3.14.8-env ×8"), ("3.14.8-env ", "×7"));
+        assert_eq!(split("2026.10.22-27dcf5f", "2026.10.19-6bbf2c4"), ("2026.10.", "22-27dcf5f"));
+        assert_eq!(split("1.0", "2.0"), ("", "1.0"));
+    }
 
     #[test]
     fn shortens_store_paths_in_quotes_and_after_unicode() {

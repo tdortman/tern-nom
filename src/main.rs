@@ -5,6 +5,7 @@
 //! is handed to the real nix-output-monitor named by `TERN_NOM_REAL`.
 
 mod drv;
+mod flake;
 mod history;
 mod nix;
 mod state;
@@ -141,6 +142,9 @@ fn monitor(
     let (tx, rx) = mpsc::channel();
     let mut child = None;
     let mut stdout = None;
+    // `nix flake metadata`/`show` for a terminal: the card draws their JSON
+    // instead of nix's text, which a pipe still gets.
+    let mut drawn: Option<String> = None;
     match source {
         Source::Spawn(args) => {
             let mut cmd = Command::new("nix");
@@ -148,6 +152,17 @@ fn monitor(
             cmd.arg(sub)
                 .args(["-v", "--log-format", "internal-json"])
                 .args(rest);
+            // SAFETY: isatty has no preconditions.
+            let terminal = unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1;
+            if let Some(flake_sub) = rest
+                .first()
+                .filter(|s| sub == "flake" && flake::Output::drawn(s))
+                && terminal
+                && !rest.iter().any(|a| a == "--json")
+            {
+                cmd.arg("--json");
+                drawn = Some(flake_sub.clone());
+            }
             let mut spawned = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
                 Ok(c) => c,
                 Err(e) => {
@@ -222,6 +237,14 @@ fn monitor(
 
     // A Ctrl+C reached nix (same process group) too, so this wait is short.
     let status = child.as_mut().map(std::process::Child::wait).transpose()?;
+    let mut printed = stdout.and_then(|h| h.join().ok());
+    if let (Some(sub), Some(bytes)) = (&drawn, &printed) {
+        state.flake = flake::Output::parse(sub, bytes);
+        // JSON the card cannot draw still reaches the user.
+        if state.flake.is_some() {
+            printed = None;
+        }
+    }
     if state.outcome.is_none() {
         let ok = status.is_none_or(|s| s.success());
         state.finish(if ok { Outcome::Done } else { Outcome::Failed });
@@ -232,7 +255,7 @@ fn monitor(
         eprintln!("tern-nom: cannot save build times to nom's history: {e}");
     }
 
-    if let Some(bytes) = stdout.and_then(|h| h.join().ok()) {
+    if let Some(bytes) = printed {
         let mut out = io::stdout().lock();
         let _ = out.write_all(&bytes);
         let _ = out.flush();

@@ -20,6 +20,7 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
   Subtrees stay folded unless something in them failed, and you can open or fold any of them.
 - Warnings in a folded section, one line each.
   A warning nix prints several times shows once with a count, store paths are cut down to the package name, and quoted option names show as code.
+- After `nom flake update` or `nom flake lock`, each input that was added, updated, or removed, with its old and new revision.
 - The paths fetched from caches, in a folded section.
 - Build logs stay hidden. Click a running build's row to show the last 8 lines of its log under the row, and click again to hide it.
   The button above those lines expands them to the last 200 lines, in a box that scrolls.
@@ -60,6 +61,7 @@ pkgs.nh.override { nix-output-monitor = inputs.tern-nom.packages.${system}.defau
 | Command | In a Tern pane |
 | --- | --- |
 | `nom build`, `nom copy`, `nom flake` | Card. tern-nom runs `nix` with `-v --log-format internal-json`. |
+| `nom flake metadata`, `nom flake show` | Card with the flake's fields and inputs, or its outputs, as trees. tern-nom adds `--json` and draws the result. Piped into another program, or given `--json`, nix's own output goes to stdout as usual. |
 | `nom --json` | Card. tern-nom reads nix's log from stdin. nh runs nom this way. |
 | `nom shell`, `nom develop`, plain `nom`, `nom-build`, `nom-shell` | The real `nom`. |
 

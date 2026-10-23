@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     drv::{self, DrvInfo},
+    flake::{self, LockChange},
     history::{History, report_name},
     nix::{Line, Message, act, drv_paths, num_field, res, store_name, str_field, strip_ansi},
 };
@@ -190,6 +191,10 @@ pub struct State {
     failed_drvs: HashSet<String>,
     /// Errors, warnings and traces.
     pub notes: Vec<Note>,
+    /// Inputs a lock file update changed.
+    pub lock_changes: Vec<LockChange>,
+    /// What `nix flake metadata` or `nix flake show` printed.
+    pub flake: Option<flake::Output>,
     /// Each build's output by `.drv` path; `""` holds output from outside
     /// builds.
     pub logs: HashMap<String, VecDeque<String>>,
@@ -234,6 +239,8 @@ impl State {
             copied_bytes: 0,
             failed_drvs: HashSet::new(),
             notes: Vec::new(),
+            lock_changes: Vec::new(),
+            flake: None,
             logs: HashMap::new(),
             activity: None,
             activity_id: 0,
@@ -446,6 +453,11 @@ impl State {
             return;
         }
         let head = plain.trim_start();
+        // nix reports a lock file update as a warning.
+        if let Some(changes) = flake::lock_changes(head) {
+            self.lock_changes.extend(changes);
+            return;
+        }
         let severity = if level == 0 && head.starts_with("error") {
             Severity::Error
         } else if level == 1

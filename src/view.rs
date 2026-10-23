@@ -19,7 +19,7 @@ pub enum Msg {
     ToggleLog(String),
 }
 
-type Node = ui::Node<Msg>;
+pub type Node = ui::Node<Msg>;
 type View = ui::View<Msg>;
 
 /// Running builds or copies listed before the rest fold into "+N more".
@@ -740,6 +740,51 @@ fn output(state: &State) -> Option<Node> {
     )
 }
 
+/// Inputs a lock file update added, updated or removed.
+fn lock_changes(state: &State) -> Option<Node> {
+    if state.lock_changes.is_empty() {
+        return None;
+    }
+    let rows: Vec<Node> = state
+        .lock_changes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let tone = match c.verb.as_str() {
+                "Added" => "success",
+                "Removed" => "warning",
+                _ => "info",
+            };
+            let mut spans = vec![ui::span(&c.input).style("strong")];
+            if let Some(from) = &c.from {
+                spans.push(ui::span(format!("  {from}")).style("muted"));
+                spans.push(ui::span(" → ").style("dim"));
+            } else {
+                spans.push(ui::span("  "));
+            }
+            if let Some(to) = &c.to {
+                spans.push(ui::span(to));
+            }
+            ui::row()
+                .gap("sm")
+                .align("center")
+                .key(i.to_string())
+                .children(nodes![
+                    ui::badge(c.verb.to_lowercase()).tone(tone).key("v"),
+                    ui::text(spans).key("t").grow(1.0),
+                ])
+                .into()
+        })
+        .collect();
+    Some(
+        ui::section()
+            .head(format!("Lock file · {} changed", rows.len()))
+            .key("lock")
+            .children(rows)
+            .into(),
+    )
+}
+
 /// The whole card; `open` is the `.drv` whose log the user opened.
 pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
     let status = match state.outcome {
@@ -749,6 +794,8 @@ pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
         Some((Outcome::Cancelled, _)) => Status::Cancelled,
     };
     let mut body: Vec<Node> = vec![summary(state)];
+    body.extend(state.flake.iter().flat_map(crate::flake::Output::view));
+    body.extend(lock_changes(state));
     body.extend(running_builds(state, open));
     body.extend(running_copies(state));
     body.extend(errors(state));

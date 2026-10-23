@@ -9,6 +9,7 @@ use crate::{
     drv::{self, DrvInfo},
     flake::{self, LockChange},
     history::{History, report_name},
+    logs::Logs,
     nix::{Line, Message, act, drv_paths, num_field, res, store_name, str_field, strip_ansi},
 };
 
@@ -198,6 +199,8 @@ pub struct State {
     /// Each build's output by `.drv` path; `""` holds output from outside
     /// builds.
     pub logs: HashMap<String, VecDeque<String>>,
+    /// Every build's whole log on disk, when a directory for it was made.
+    pub full_logs: Option<Logs>,
     /// What nix does outside builds and copies (evaluation, queries).
     pub activity: Option<String>,
     /// The id of the activity `activity` describes.
@@ -242,6 +245,7 @@ impl State {
             lock_changes: Vec::new(),
             flake: None,
             logs: HashMap::new(),
+            full_logs: None,
             activity: None,
             activity_id: 0,
             started: Instant::now(),
@@ -355,6 +359,9 @@ impl State {
             .remove(&id)
             .map_or(Duration::ZERO, |t| t.elapsed());
         if let Some(build) = self.builds.remove(&id) {
+            if let Some(logs) = &mut self.full_logs {
+                logs.close(&build.drv);
+            }
             let failed = self.failed_drvs.contains(&build.drv);
             self.built.push(Finished {
                 path: build.drv,
@@ -493,8 +500,12 @@ impl State {
         }
     }
 
-    /// Appends to a log, dropping its oldest line when full.
+    /// Appends to a log, dropping its oldest line when full; a build's line
+    /// also goes to its log file.
     fn push_log(&mut self, key: &str, line: String) {
+        if let Some(logs) = self.full_logs.as_mut().filter(|_| !key.is_empty()) {
+            logs.write(key, &line);
+        }
         let log = self.logs.entry(key.to_owned()).or_default();
         if log.len() == LOG_LINES {
             log.pop_front();

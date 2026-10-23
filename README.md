@@ -25,7 +25,11 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 - Build logs stay hidden. Click a running build's row to show the last 8 lines of its log under the row, and click again to hide it.
   The button above those lines expands them to the last 200 lines, in a box that scrolls.
   A failed build's log is always shown in its failure block.
-  Output nix prints outside any build sits in a folded section.
+- Output nix prints outside any build, in a folded section.
+- Every build's whole log, without colors, in `$XDG_CACHE_HOME/tern-nom/logs`, one directory per run, keeping the last 10 runs.
+  Click "Full log" under an open log or a failure to open the file in a Tern file block, where Tern's search finds any line.
+  The block reloads as the build prints.
+  After the run, Ctrl+click (⌘-click on macOS) a derivation's name in the tree to open its log.
 
 Ctrl+C stops nix as usual. The card then reads Cancelled and `nom` exits with 130.
 

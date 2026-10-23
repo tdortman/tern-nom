@@ -7,6 +7,7 @@
 mod drv;
 mod flake;
 mod history;
+mod logs;
 mod nix;
 mod state;
 mod tty;
@@ -133,6 +134,20 @@ fn pump_lines(input: impl Read + Send + 'static, tx: mpsc::Sender<nix::Line>) {
     });
 }
 
+/// Shows `path` in a Tern file block beside this pane.
+fn open_in_tern(path: &str) {
+    let spawned = Command::new("tern")
+        .args(["open", path])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    // Without `tern` on PATH the link still opens with Ctrl/⌘-click.
+    if let Ok(mut child) = spawned {
+        thread::spawn(move || child.wait());
+    }
+}
+
 /// Monitors `source` on `session`; the process's exit code.
 fn monitor(
     mut session: Session<Msg>,
@@ -187,6 +202,7 @@ fn monitor(
     let sf = session.open(SurfaceOptions::flow().title(title.clone()))?;
     let reader: state::DrvReader = Box::new(|path| std::fs::read_to_string(path).ok());
     let mut state = State::new(history::History::load(), reader);
+    state.full_logs = logs::Logs::create();
     // The `.drv` whose log the user opened by clicking its row.
     let mut open: Option<String> = None;
     session.render(sf, view::view(&state, &title, None))?;
@@ -197,16 +213,25 @@ fn monitor(
             state.finish(Outcome::Cancelled);
             break;
         }
-        // A click on a running build opens or closes its log; reading also
-        // lets acks free frames.
-        if let Some(Input::Msg(Msg::ToggleLog(drv), _)) = session.next(Some(POLL))? {
-            open = if open.as_deref() == Some(drv.as_str()) {
-                None
-            } else {
-                Some(drv)
-            };
-            session.render(sf, view::view(&state, &title, open.as_deref()))?;
-            last = Instant::now();
+        // A click on a running build opens or closes its log, one on "Full
+        // log" opens the file; reading also lets acks free frames.
+        match session.next(Some(POLL))? {
+            Some(Input::Msg(Msg::ToggleLog(drv), _)) => {
+                open = if open.as_deref() == Some(drv.as_str()) {
+                    None
+                } else {
+                    Some(drv)
+                };
+                session.render(sf, view::view(&state, &title, open.as_deref()))?;
+                last = Instant::now();
+            }
+            Some(Input::Msg(Msg::OpenFile(path), _)) => {
+                if let Some(logs) = &mut state.full_logs {
+                    logs.flush();
+                }
+                open_in_tern(&path);
+            }
+            _ => {}
         }
         let ended = loop {
             // What nix logs while it dies (builds stopping) is not progress.
@@ -229,6 +254,9 @@ fn monitor(
         // so redraw while builds or copies run.
         let tick = !(state.builds.is_empty() && state.copies.is_empty()) && last.elapsed() >= TICK;
         if (dirty && last.elapsed() >= FRAME) || tick {
+            if let Some(logs) = &mut state.full_logs {
+                logs.flush();
+            }
             session.render(sf, view::view(&state, &title, open.as_deref()))?;
             last = Instant::now();
             dirty = false;
@@ -248,6 +276,9 @@ fn monitor(
     if state.outcome.is_none() {
         let ok = status.is_none_or(|s| s.success());
         state.finish(if ok { Outcome::Done } else { Outcome::Failed });
+    }
+    if let Some(logs) = &mut state.full_logs {
+        logs.flush();
     }
     session.render(sf, view::view(&state, &title, open.as_deref()))?;
     session.close()?;

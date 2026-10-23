@@ -16,7 +16,7 @@ mod view;
 
 use std::{
     io::{self, BufRead as _, BufReader, Read, Write as _},
-    os::unix::process::CommandExt as _,
+    os::unix::process::{CommandExt as _, ExitStatusExt as _},
     path::Path,
     process::{Command, ExitCode, Stdio},
     sync::{
@@ -101,11 +101,16 @@ fn connect() -> Option<Session<Msg>> {
 /// adds `--diff never` to `nh os|home|darwin <verb>`, whose package diff
 /// the card draws.
 fn nh(real: &str, args: &[String]) -> ExitCode {
+    if !in_tern_pane() {
+        let err = Command::new(real).arg0("nh").args(args).exec();
+        eprintln!("tern-nom: cannot run nh: {err}");
+        return ExitCode::FAILURE;
+    }
     let mut args = args.to_vec();
     let chose = args
         .iter()
         .any(|a| a == "--diff" || a == "-d" || a.starts_with("--diff="));
-    if in_tern_pane() && !chose {
+    if !chose {
         let at = args.windows(2).position(|w| {
             matches!(w[0].as_str(), "os" | "home" | "darwin")
                 && matches!(
@@ -117,9 +122,46 @@ fn nh(real: &str, args: &[String]) -> ExitCode {
             args.splice(i + 2..i + 2, ["--diff".to_owned(), "never".to_owned()]);
         }
     }
-    let err = Command::new(real).arg0("nh").args(&args).exec();
-    eprintln!("tern-nom: cannot run nh: {err}");
-    ExitCode::FAILURE
+    // Ctrl+C kills nh at once while its nom still restores the terminal.
+    // Were nh this process, the shell would take the terminal back in nom's
+    // raw mode and keep it (no Enter for sudo), and nom's restore would
+    // fail with EIO. So nh runs as a child, and nom and nix, handed to this
+    // process as subreaper when nh dies, are waited for first. A handler,
+    // not SIG_IGN, so nh still gets Ctrl+C.
+    // SAFETY: the handler only stores to an atomic; PR_SET_CHILD_SUBREAPER
+    // takes a flag and has no other preconditions.
+    unsafe {
+        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
+        libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1);
+    }
+    let status = match Command::new(real).arg0("nh").args(&args).status() {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("tern-nom: cannot run nh: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // SAFETY: getpgrp has no preconditions; waitpid only reaps children in
+    // this process group, so a daemonized ssh master is left alone.
+    unsafe {
+        let job = libc::getpgrp();
+        while libc::waitpid(-job, std::ptr::null_mut(), 0) > 0 {}
+    }
+    if let Some(sig) = status.signal() {
+        // Dying of nh's signal tells the shell what Ctrl+C means to it.
+        // SAFETY: restoring the default action and raising have no
+        // preconditions.
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+    }
+    ExitCode::from(
+        status
+            .code()
+            .and_then(|c| u8::try_from(c).ok())
+            .unwrap_or(1),
+    )
 }
 
 /// The command line of this process's parent (`nh os switch`), for the

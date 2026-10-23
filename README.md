@@ -29,7 +29,7 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
   A nested input's parent path and a `follows` are dimmed, so the input's own name stands out.
 - The paths fetched from caches, in a folded section.
 - Build logs stay hidden. Click a running build's row to show the last 8 lines of its log under the row, and click again to hide it.
-  The button above those lines expands them to the last 200 lines, in a box that scrolls.
+  The button above those lines expands them to the last 400 lines, in a box 30 lines tall that scrolls.
   A failed build's log is always shown in its failure block.
 - Output nix prints outside any build, in a folded section.
 - Every build's whole log, without colors, in `$XDG_CACHE_HOME/tern-nom/logs`, one directory per run, keeping the last 10 runs.

@@ -52,6 +52,28 @@ pub struct Copy {
     pub expected: u64,
 }
 
+/// A flake input nix fetches, by the reference it names.
+#[derive(Debug)]
+pub struct InputFetch {
+    /// `github:NixOS/nixpkgs/nixos-unstable`.
+    pub reference: String,
+    /// Whether nix moved on to the next input or finished.
+    pub done: bool,
+    /// Bytes its current download got.
+    pub bytes: u64,
+    /// Bytes its current download expects, 0 while unknown.
+    pub expected: u64,
+    /// When its last download ended, while nix still works on it (unpacks
+    /// and hashes the source) without saying so.
+    pub downloaded: Option<Instant>,
+}
+
+/// The reference in nix's `fetching github input 'github:a/b'`.
+fn fetched_input(plain: &str) -> Option<&str> {
+    let rest = plain.trim().strip_prefix("fetching ")?;
+    rest.split_once(" input '")?.1.strip_suffix('\'')
+}
+
 /// A build or copy that ended.
 #[derive(Debug)]
 pub struct Finished {
@@ -195,6 +217,10 @@ pub struct State {
     pub notes: Vec<Note>,
     /// Inputs a lock file update changed.
     pub lock_changes: Vec<LockChange>,
+    /// Flake inputs nix fetched, in order.
+    pub inputs: Vec<InputFetch>,
+    /// Downloads that belong to the input being fetched.
+    input_transfers: HashSet<u64>,
     /// What `nix flake metadata` or `nix flake show` printed.
     pub flake: Option<flake::Output>,
     /// Each build's output by `.drv` path; `""` holds output from outside
@@ -246,6 +272,8 @@ impl State {
             failed_drvs: HashSet::new(),
             notes: Vec::new(),
             lock_changes: Vec::new(),
+            inputs: Vec::new(),
+            input_transfers: HashSet::new(),
             flake: None,
             logs: HashMap::new(),
             closure: None,
@@ -342,8 +370,16 @@ impl State {
             act::COPY_PATHS => {
                 self.copy_counts.insert(id, Counts::default());
             }
-            // NAR and narinfo downloads: their copy or query says it better.
-            act::FILE_TRANSFER => {}
+            // Downloads behind a flake input show on its row; NAR and
+            // narinfo downloads: their copy or query says it better.
+            act::FILE_TRANSFER => {
+                if let Some(input) = self.inputs.last_mut().filter(|i| !i.done) {
+                    self.input_transfers.insert(id);
+                    input.bytes = 0;
+                    input.expected = 0;
+                    input.downloaded = None;
+                }
+            }
             _ if !text.is_empty() => {
                 self.activity = Some(text.to_owned());
                 self.activity_id = id;
@@ -355,6 +391,11 @@ impl State {
     /// An activity stopped.
     fn stop(&mut self, id: u64) {
         self.kinds.remove(&id);
+        if self.input_transfers.remove(&id)
+            && let Some(input) = self.inputs.last_mut().filter(|i| !i.done)
+        {
+            input.downloaded = Some(Instant::now());
+        }
         if self.activity_id == id {
             self.activity = None;
         }
@@ -425,6 +466,12 @@ impl State {
                         copy.expected = num_field(fields, 1);
                     }
                 }
+                Some(act::FILE_TRANSFER) if self.input_transfers.contains(&id) => {
+                    if let Some(input) = self.inputs.last_mut() {
+                        input.bytes = num_field(fields, 0);
+                        input.expected = num_field(fields, 1);
+                    }
+                }
                 _ => {}
             },
             res::SET_EXPECTED
@@ -459,13 +506,22 @@ impl State {
                 self.listing = Listing::None;
             }
         }
-        // Levels above notice are nix's own progress chatter under `-v`.
+        // Levels above notice are nix's own progress chatter under `-v`,
+        // except the flake inputs it fetches one after another.
+        if let Some(reference) = fetched_input(&plain) {
+            self.fetch_input(reference);
+            return;
+        }
         if level > 2 {
             return;
         }
         let head = plain.trim_start();
-        // nix reports a lock file update as a warning.
+        // nix reports a lock file update as a warning, once every input is
+        // fetched.
         if let Some(changes) = flake::lock_changes(head) {
+            if let Some(input) = self.inputs.last_mut() {
+                input.done = true;
+            }
             self.lock_changes.extend(changes);
             return;
         }
@@ -490,6 +546,24 @@ impl State {
                 count: 1,
             }),
         }
+    }
+
+    /// nix fetches flake inputs one at a time: a new one means the last is
+    /// done. Local `path:` and `git+file:` sources take no time to show.
+    fn fetch_input(&mut self, reference: &str) {
+        if reference.starts_with("path:") || reference.starts_with("git+file:") {
+            return;
+        }
+        if let Some(input) = self.inputs.last_mut() {
+            input.done = true;
+        }
+        self.inputs.push(InputFetch {
+            reference: reference.to_owned(),
+            done: false,
+            bytes: 0,
+            expected: 0,
+            downloaded: None,
+        });
     }
 
     /// Marks builds an error names as failed; Lix reports a builder's failure

@@ -319,9 +319,11 @@ fn monitor(
         if ended {
             break;
         }
-        // Timers and estimate bars are text, and rows appear after a second,
-        // so redraw while builds or copies run.
-        let tick = !(state.builds.is_empty() && state.copies.is_empty()) && last.elapsed() >= TICK;
+        // Timers, estimate bars and an input's quiet unpacking are text, and
+        // rows appear after a second, so redraw while anything runs.
+        let busy = !(state.builds.is_empty() && state.copies.is_empty())
+            || state.inputs.last().is_some_and(|i| !i.done);
+        let tick = busy && last.elapsed() >= TICK;
         let shown = sf.is_some()
             || !state.builds.is_empty()
             || !state.copies.is_empty()

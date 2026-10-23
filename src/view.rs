@@ -133,6 +133,8 @@ fn summary(state: &State) -> Node {
                 "Building"
             } else if !state.copies.is_empty() {
                 "Fetching"
+            } else if state.inputs.last().is_some_and(|i| !i.done) {
+                "Fetching inputs"
             } else {
                 "Evaluating"
             };
@@ -770,6 +772,91 @@ fn output(state: &State) -> Option<Node> {
     )
 }
 
+/// The flake inputs nix fetched so far, one per row, while it runs: done
+/// ones checked, the current one with its download.
+fn fetch_inputs(state: &State) -> Option<Node> {
+    if state.inputs.is_empty() || state.outcome.is_some() {
+        return None;
+    }
+    let done = state.inputs.iter().filter(|i| i.done).count();
+    let rows: Vec<Node> = state
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, input)| {
+            let (kind, rest) = input
+                .reference
+                .split_once(':')
+                .unwrap_or(("", &input.reference));
+            let indicator: Node = if input.done {
+                ui::icon("check").tone("success").key("s").into()
+            } else {
+                ui::spinner()
+                    .style("braille")
+                    .tone("accent")
+                    .key("s")
+                    .into()
+            };
+            let mut row = nodes![
+                indicator,
+                ui::text(vec![
+                    ui::span(format!("{kind}:")).style("dim"),
+                    ui::span(rest).style(if input.done { "muted" } else { "strong" }),
+                ])
+                .truncate("end")
+                .wrap("none")
+                .shrink(1.0)
+                .key("n"),
+            ];
+            // nix unpacks and hashes a source after downloading it, silently;
+            // a moment after the download ends, the row says so.
+            let unpacking = input
+                .downloaded
+                .is_some_and(|t| t.elapsed() >= Duration::from_secs(1));
+            if input.done {
+            } else if unpacking {
+                let text = if input.bytes > 0 {
+                    format!("{} · unpacking", size(input.bytes))
+                } else {
+                    "unpacking".to_owned()
+                };
+                row.push(ui::spacer().grow(1.0).key("sp").into());
+                row.push(ui::text(ui::span(text).style("muted")).key("b").into());
+            } else if input.expected > 0 {
+                row.push(
+                    ui::progress()
+                        .value(input.bytes as f64 / input.expected as f64)
+                        .label(format!("{} / {}", size(input.bytes), size(input.expected)))
+                        .tone("info")
+                        .grow(1.0)
+                        .key("b")
+                        .into(),
+                );
+            } else if input.bytes > 0 {
+                row.push(ui::spacer().grow(1.0).key("sp").into());
+                row.push(
+                    ui::text(ui::span(size(input.bytes)).style("num"))
+                        .key("b")
+                        .into(),
+                );
+            }
+            ui::row()
+                .gap("sm")
+                .align("center")
+                .key(i.to_string())
+                .children(row)
+                .into()
+        })
+        .collect();
+    Some(
+        ui::section()
+            .head(format!("Inputs · {done} fetched"))
+            .key("inputs")
+            .children(rows)
+            .into(),
+    )
+}
+
 /// One side of a lock change: revision and date, with the source when it
 /// differs from the row's.
 fn lock_cell(lock: Option<&Lock>, source: &str, style: &str) -> Vec<ui::Span> {
@@ -1028,6 +1115,7 @@ pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
     };
     let mut body: Vec<Node> = vec![summary(state)];
     body.extend(state.flake.iter().flat_map(crate::flake::Output::view));
+    body.extend(fetch_inputs(state));
     body.extend(lock_changes(state));
     body.extend(changes(state));
     body.extend(running_builds(state, open));

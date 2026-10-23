@@ -20,6 +20,9 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
   Subtrees stay folded unless something in them failed, and you can open or fold any of them.
 - Warnings in a folded section, one line each.
   A warning nix prints several times shows once with a count, store paths are cut down to the package name, and quoted option names show as code.
+- While nix fetches flake inputs, one row per input in the order nix fetches them: done ones checked, the current one with its download.
+  When nix stops reporting progress after a download because it is unpacking the source, the row says so instead of showing a full bar.
+  The rows leave once the run ends. Local `path:` and `git+file:` sources are not listed.
 - After `nom flake update` or `nom flake lock`, a table of the inputs that were updated, added, or removed: each input's source, and its revision and date before and after.
   A nested input's parent path and a `follows` are dimmed, so the input's own name stands out.
 - The paths fetched from caches, in a folded section.

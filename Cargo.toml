@@ -1,6 +1,6 @@
 [package]
 name = "tern-nom"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 description = "nix-output-monitor drawn natively in Tern over the Tern Surface Protocol"
 license = "MIT"

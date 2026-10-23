@@ -60,6 +60,12 @@ nh puts its own copy of nom on its `PATH`. To make nh use tern-nom, override nh:
 pkgs.nh.override { nix-output-monitor = inputs.tern-nom.packages.${system}.default; }
 ```
 
+Under `nh os`, `nh home` and `nh darwin`, the card shows what the build changes against the running system or home-manager profile once the build ends.
+tern-nom runs [dix](https://github.com/faukah/dix), the tool nh uses for its own diff, with `--output json`.
+It finds the new closure through the `--out-link` of the `nix build` that nh runs beside it.
+The system's own packages are listed with their old and new versions and size change, and their dependencies are folded below them.
+nh still prints its text diff after the card. Pass `--diff never` to nh to see only the card.
+
 ## Which commands draw a card
 
 | Command | In a Tern pane |

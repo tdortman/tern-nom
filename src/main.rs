@@ -4,6 +4,7 @@
 //! become a live Tern card; everything else, and every run outside Tern,
 //! is handed to the real nix-output-monitor named by `TERN_NOM_REAL`.
 
+mod diff;
 mod drv;
 mod flake;
 mod history;
@@ -22,7 +23,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use state::{Outcome, State};
@@ -91,21 +92,8 @@ fn connect() -> Option<Session<Msg>> {
 /// The command line of this process's parent (`nh os switch`), for the
 /// card's title under a pipe.
 fn parent_command() -> Option<String> {
-    // SAFETY: getppid has no preconditions.
-    let ppid = unsafe { libc::getppid() };
-    let raw = std::fs::read(format!("/proc/{ppid}/cmdline")).ok()?;
-    let args: Vec<_> = raw
-        .split(|&b| b == 0)
-        .filter(|a| !a.is_empty())
-        .map(String::from_utf8_lossy)
-        .collect();
-    let program = args
-        .first()?
-        .rsplit('/')
-        .next()?
-        .trim_start_matches('.')
-        .trim_end_matches("-wrapped");
-    let mut title = program.to_owned();
+    let args = diff::cmdline(std::os::unix::process::parent_id())?;
+    let mut title = diff::program(&args)?.to_owned();
     for arg in &args[1..] {
         title.push(' ');
         title.push_str(arg);
@@ -157,6 +145,10 @@ fn monitor(
     let (tx, rx) = mpsc::channel();
     let mut child = None;
     let mut stdout = None;
+    // Under `nh os|home|darwin`, what it compares once the build ends; read
+    // now, while nh's `nix build` still runs.
+    let mut compare = None;
+    let started = SystemTime::now();
     // `nix flake metadata`/`show` for a terminal: the card draws their JSON
     // instead of nix's text, which a pipe still gets.
     let mut drawn: Option<String> = None;
@@ -196,7 +188,10 @@ fn monitor(
             }));
             child = Some(spawned);
         }
-        Source::Stdin => pump_lines(io::stdin(), tx),
+        Source::Stdin => {
+            compare = diff::target(std::os::unix::process::parent_id());
+            pump_lines(io::stdin(), tx);
+        }
     }
 
     let sf = session.open(SurfaceOptions::flow().title(title.clone()))?;
@@ -275,6 +270,12 @@ fn monitor(
     }
     if state.outcome.is_none() {
         let ok = status.is_none_or(|s| s.success());
+        if let Some(target) = compare.as_ref().filter(|_| ok) {
+            state.activity = Some("Comparing with the current system".to_owned());
+            session.render(sf, view::view(&state, &title, open.as_deref()))?;
+            state.closure = target.diff(started);
+            state.activity = None;
+        }
         state.finish(if ok { Outcome::Done } else { Outcome::Failed });
     }
     if let Some(logs) = &mut state.full_logs {

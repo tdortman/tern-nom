@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::{
+    diff::Closure,
     drv::{self, DrvInfo},
     flake::{self, LockChange},
     history::{History, report_name},
@@ -199,6 +200,8 @@ pub struct State {
     /// Each build's output by `.drv` path; `""` holds output from outside
     /// builds.
     pub logs: HashMap<String, VecDeque<String>>,
+    /// What changes against the current system, under nh.
+    pub closure: Option<Closure>,
     /// Every build's whole log on disk, when a directory for it was made.
     pub full_logs: Option<Logs>,
     /// What nix does outside builds and copies (evaluation, queries).
@@ -245,6 +248,7 @@ impl State {
             lock_changes: Vec::new(),
             flake: None,
             logs: HashMap::new(),
+            closure: None,
             full_logs: None,
             activity: None,
             activity_id: 0,

@@ -4,10 +4,11 @@ use std::{collections::BTreeMap, time::Duration};
 
 use tern_sdk::{
     nodes,
-    ui::{self, Bound, Extent, Status, TreeItem},
+    ui::{self, Bound, Column, Extent, Status, TableRow, TreeItem},
 };
 
 use crate::{
+    diff::Package,
     nix::{store_name, strip_ansi},
     state::{Counts, DepNode, DrvStatus, Outcome, Severity, State},
 };
@@ -813,6 +814,116 @@ fn lock_changes(state: &State) -> Option<Node> {
     )
 }
 
+/// `bytes` with a sign, as dix prints size changes.
+fn signed_size(bytes: i64) -> String {
+    let sign = if bytes < 0 { '−' } else { '+' };
+    format!("{sign}{}", size(bytes.unsigned_abs()))
+}
+
+/// Packages as a table: status, name, versions before and after, size.
+fn package_table(packages: &[&Package], key: &str) -> Node {
+    let mut table = ui::table()
+        .key(key)
+        .col(Column::new("s", "").priority(1.0))
+        .col(Column::new("n", "Package").truncate("end"))
+        .col(
+            Column::new("v", "Version")
+                .grow(1.0)
+                .truncate("middle")
+                .priority(2.0),
+        )
+        .col(Column::new("d", "Size").align("end").priority(3.0));
+    for (i, p) in packages.iter().enumerate() {
+        let (word, tone) = match p.status.as_str() {
+            "Upgraded" => ("upgraded", "accent"),
+            "Downgraded" => ("downgraded", "warning"),
+            "Added" => ("added", "success"),
+            "Removed" => ("removed", "error"),
+            "Mixed" => ("mixed", "warning"),
+            _ => ("changed", "muted"),
+        };
+        let (old, new) = p.versions();
+        let mut versions = Vec::new();
+        match (old.is_empty(), new.is_empty()) {
+            (false, false) => {
+                versions.push(ui::span(old).style("muted"));
+                versions.push(ui::span(" → ").style("dim"));
+                versions.push(ui::span(new));
+            }
+            (true, false) => versions.push(ui::span(new)),
+            (false, true) => versions.push(ui::span(old).style("del")),
+            (true, true) => {}
+        }
+        table = table.row(
+            TableRow::new(i.to_string())
+                .cell("s", ui::span(word).style(tone))
+                .cell("n", ui::span(&p.name).style("strong"))
+                .cell("v", versions)
+                .cell("d", ui::span(signed_size(p.size_delta)).style("num")),
+        );
+    }
+    table.into()
+}
+
+/// What the build changes against the current system, like nh's dix diff:
+/// the system's own packages open, their dependencies folded.
+fn changes(state: &State) -> Option<Node> {
+    let closure = state.closure.as_ref()?;
+    // dix's order: changed, then added, then removed.
+    let rank = |p: &&Package| match p.status.as_str() {
+        "Added" => 1,
+        "Removed" => 2,
+        _ => 0,
+    };
+    let mut picked: Vec<&Package> = closure.diffs.iter().filter(|p| p.selected()).collect();
+    let mut deps: Vec<&Package> = closure.diffs.iter().filter(|p| !p.selected()).collect();
+    picked.sort_by_key(rank);
+    deps.sort_by_key(rank);
+    let p = &closure.paths;
+    let delta = i64::try_from(closure.size_new).unwrap_or(i64::MAX)
+        - i64::try_from(closure.size_old).unwrap_or(i64::MAX);
+    let mut body = nodes![
+        ui::text(vec![
+            ui::span(format!("{} → {} paths", p.old, p.new)).style("muted"),
+            ui::span(format!(" (+{}, −{})", p.added, p.removed)).style("dim"),
+            ui::span(format!(
+                " · {} → {} ",
+                size(closure.size_old),
+                size(closure.size_new)
+            ))
+            .style("muted"),
+            ui::span(signed_size(delta)).style("num"),
+        ])
+        .key("sum"),
+    ];
+    if !picked.is_empty() {
+        body.push(package_table(&picked, "pkgs"));
+    }
+    if !deps.is_empty() {
+        body.push(
+            ui::section()
+                .head(format!("Dependencies · {}", deps.len()))
+                .collapsible(true)
+                .collapsed(true)
+                .key("deps")
+                .child(package_table(&deps, "t"))
+                .into(),
+        );
+    }
+    let head = match picked.len() {
+        0 if deps.is_empty() => "Changes · none".to_owned(),
+        1 => "Changes · 1 package".to_owned(),
+        n => format!("Changes · {n} packages"),
+    };
+    Some(
+        ui::section()
+            .head(head)
+            .key("changes")
+            .children(body)
+            .into(),
+    )
+}
+
 /// The whole card; `open` is the `.drv` whose log the user opened.
 pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
     let status = match state.outcome {
@@ -824,6 +935,7 @@ pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
     let mut body: Vec<Node> = vec![summary(state)];
     body.extend(state.flake.iter().flat_map(crate::flake::Output::view));
     body.extend(lock_changes(state));
+    body.extend(changes(state));
     body.extend(running_builds(state, open));
     body.extend(running_copies(state));
     body.extend(errors(state));

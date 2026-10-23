@@ -13,5 +13,6 @@ pkgs.mkShell {
   # `cargo run -- build …` falls back to this nom outside Tern.
   shellHook = ''
     export TERN_NOM_REAL=${pkgs.lib.getExe' pkgs.nix-output-monitor "nom"}
+    export TERN_NOM_DIX=${pkgs.lib.getExe pkgs.dix}
   '';
 }

@@ -1,5 +1,6 @@
 {
   lib,
+  dix,
   inputs,
   makeBinaryWrapper,
   nix-output-monitor,
@@ -26,7 +27,9 @@ rustPlatform.buildRustPackage {
   # draw itself goes to the real nom.
   postInstall = ''
     mv $out/bin/tern-nom $out/bin/nom
-    wrapProgram $out/bin/nom --set TERN_NOM_REAL ${lib.getExe' nix-output-monitor "nom"}
+    wrapProgram $out/bin/nom \
+      --set TERN_NOM_REAL ${lib.getExe' nix-output-monitor "nom"} \
+      --set TERN_NOM_DIX ${lib.getExe dix}
     ln -s ${lib.getExe' nix-output-monitor "nom-build"} $out/bin/nom-build
     ln -s ${lib.getExe' nix-output-monitor "nom-shell"} $out/bin/nom-shell
   '';

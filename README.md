@@ -7,7 +7,9 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 
 ## What the card shows
 
-- Built and fetched counts, what nix is doing, and a timer.
+- Built and fetched counts, and a timer.
+- What nix does besides builds and downloads, such as evaluating or querying caches, as a log under the counts.
+  While nix runs, the log shows its last two lines and can be expanded. Once the run ends, it folds into one line that can be opened.
 - At the bottom, a progress bar for builds and a download bar over all paths fetched from caches.
 - One row per running build, with its stdenv phase, its last output line, and how long it has run.
   If nom has timed the same package before, the row also has a progress bar against that estimate.

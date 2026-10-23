@@ -230,10 +230,9 @@ pub struct State {
     pub closure: Option<Closure>,
     /// Every build's whole log on disk, when a directory for it was made.
     pub full_logs: Option<Logs>,
-    /// What nix does outside builds and copies (evaluation, queries).
-    pub activity: Option<String>,
-    /// The id of the activity `activity` describes.
-    activity_id: u64,
+    /// What nix did outside builds, copies and inputs (evaluation, cache
+    /// queries), one line each, `\r\n`-ended for Tern's `ansi` element.
+    pub activity_log: String,
     /// When monitoring started.
     pub started: Instant,
     /// How long it took and how it ended, once it ended.
@@ -278,8 +277,7 @@ impl State {
             logs: HashMap::new(),
             closure: None,
             full_logs: None,
-            activity: None,
-            activity_id: 0,
+            activity_log: String::new(),
             started: Instant::now(),
             outcome: None,
             planned: Vec::new(),
@@ -380,10 +378,7 @@ impl State {
                     input.downloaded = None;
                 }
             }
-            _ if !text.is_empty() => {
-                self.activity = Some(text.to_owned());
-                self.activity_id = id;
-            }
+            _ if !text.is_empty() => self.log_activity(text),
             _ => {}
         }
     }
@@ -395,9 +390,6 @@ impl State {
             && let Some(input) = self.inputs.last_mut().filter(|i| !i.done)
         {
             input.downloaded = Some(Instant::now());
-        }
-        if self.activity_id == id {
-            self.activity = None;
         }
         let took = self
             .starts
@@ -673,6 +665,12 @@ impl State {
             .map_or(Duration::ZERO, Instant::elapsed)
     }
 
+    /// Adds a line to the activity log; tern-nom's own steps go there too.
+    pub fn log_activity(&mut self, text: &str) {
+        self.activity_log.push_str(text);
+        self.activity_log.push_str("\r\n");
+    }
+
     /// Whether a finished run that never showed a card has anything to say:
     /// builds, downloads, warnings, errors, a lock file change or a diff.
     pub fn worth_showing(&self) -> bool {
@@ -880,13 +878,7 @@ mod tests {
                 let (done, total) = state.copy_bytes();
                 assert!(done < total && total == 690_460_208, "{done} / {total}");
             }
-            assert!(
-                !state
-                    .activity
-                    .as_deref()
-                    .unwrap_or_default()
-                    .starts_with("downloading")
-            );
+            assert!(!state.activity_log.contains("downloading"));
         }
         assert_eq!(state.build_counts().expected, 0);
         assert_eq!(

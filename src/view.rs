@@ -128,8 +128,7 @@ fn count_badges(c: Counts, label: &str, key: &str, finished: bool) -> Vec<Node> 
     out
 }
 
-/// The header: activity word, counts and timer, then while nix runs what it
-/// is doing on a line of its own.
+/// The header row: activity word, counts, timer.
 fn summary(state: &State) -> Node {
     let mut row: Vec<Node> = Vec::new();
     match state.outcome {
@@ -191,24 +190,42 @@ fn summary(state: &State) -> Node {
         timer = timer.stopped(u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
     }
     row.push(timer.key("t").into());
-    let head: Node = ui::row()
+    ui::row()
         .gap("sm")
         .align("center")
         .key("sum")
         .children(row)
-        .into();
-    if state.outcome.is_some() {
-        return head;
+        .into()
+}
+
+/// Everything nix did outside builds, copies and inputs, as a log: its last
+/// line while nix runs, which expands to the rest; folded once it ends.
+fn activity(state: &State) -> Option<Node> {
+    if state.activity_log.is_empty() {
+        return None;
     }
-    // A store path and the cache it is checked on: cut in the middle so
-    // both ends stay. The line stays while nix is quiet, so the card does
-    // not jump each time an activity starts or stops.
-    let activity = state.activity.as_deref().map(shorten);
-    let line = ui::text(ui::span(activity.unwrap_or_else(|| "\u{a0}".to_owned())).style("muted"))
-        .truncate("middle")
-        .wrap("none")
-        .key("act");
-    ui::col().key("head").children(nodes![head, line]).into()
+    // Faint like the rest of the card's secondary text; store paths cut
+    // down to the package name, line by line so the text only grows.
+    let text = format!("\x1b[2m{}", shorten(&state.activity_log));
+    let log = ui::ansi(text)
+        .follow(true)
+        .max(Bound::h(Extent::Lines(12.0)))
+        .key("log");
+    if state.outcome.is_none() {
+        // Tern fades the top line of a following preview, so the current
+        // activity needs one above it to stay readable.
+        return Some(log.preview(2).key("activity").into());
+    }
+    let lines = state.activity_log.matches("\r\n").count();
+    Some(
+        ui::section()
+            .head(format!("Activity · {lines}"))
+            .collapsible(true)
+            .collapsed(true)
+            .key("activity")
+            .child(log)
+            .into(),
+    )
 }
 
 /// Builds or copies that have run long enough to get a row: the many that
@@ -1131,6 +1148,7 @@ pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
         Some((Outcome::Cancelled, _)) => Status::Cancelled,
     };
     let mut body: Vec<Node> = vec![summary(state)];
+    body.extend(activity(state));
     body.extend(state.flake.iter().flat_map(crate::flake::Output::view));
     body.extend(fetch_inputs(state));
     body.extend(lock_changes(state));

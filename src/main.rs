@@ -356,7 +356,7 @@ fn monitor(
     if state.outcome.is_none() {
         let ok = status.is_none_or(|s| s.success());
         if let Some(target) = compare.as_ref().filter(|_| ok) {
-            state.activity = Some("Comparing with the current system".to_owned());
+            state.log_activity("comparing with the current system");
             draw(
                 &mut session,
                 &mut sf,
@@ -364,7 +364,6 @@ fn monitor(
                 view::view(&state, &title, open.as_deref()),
             )?;
             state.closure = target.diff(started);
-            state.activity = None;
         }
         state.finish(if ok { Outcome::Done } else { Outcome::Failed });
     }

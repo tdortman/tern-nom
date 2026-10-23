@@ -69,27 +69,8 @@ impl Logs {
                     .dir
                     .join(format!("{name}-{}.log", hash.get(..7).unwrap_or(hash)));
             }
-<<<<<<< Updated upstream
             self.files
                 .insert(drv.to_owned(), LogFile { path, out: None });
-||||||| Stash base
-            self.files.insert(
-                drv.to_owned(),
-                LogFile {
-                    path,
-                    out: None,
-                    lines: 0,
-                },
-            );
-=======
-            self.files.insert(
-                drv.to_owned(),
-                LogFile {
-                    path,
-                    out: None,
-                },
-            );
->>>>>>> Stashed changes
         }
         let Some(file) = self.files.get_mut(drv) else {
             return;

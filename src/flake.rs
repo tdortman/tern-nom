@@ -13,9 +13,57 @@ pub struct LockChange {
     /// The input's path, like `nixpkgs` or `snowfall-lib/treefmt-nix`.
     pub input: String,
     /// What it was locked to.
-    pub from: Option<String>,
+    pub from: Option<Lock>,
     /// What it is locked to now.
-    pub to: Option<String>,
+    pub to: Option<Lock>,
+}
+
+/// What an input is locked to, as nix lists it in a lock file update.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Lock {
+    /// A source at a revision: `github:NixOS/nixpkgs`, `02c087f`, and the
+    /// date of that revision.
+    Pinned {
+        source: String,
+        rev: Option<String>,
+        date: Option<String>,
+    },
+    /// The same input as another one, by its path.
+    Follows(String),
+}
+
+impl Lock {
+    /// `'github:NixOS/nixpkgs/<rev>' (2026-10-20)` or `follows 'nixpkgs'`.
+    fn parse(line: &str) -> Self {
+        let line = line.replace('\'', "");
+        if let Some(target) = line.strip_prefix("follows ") {
+            return Self::Follows(target.trim().to_owned());
+        }
+        let (url, date) = match line.rsplit_once(" (") {
+            Some((url, date)) => (url, date.strip_suffix(')')),
+            None => (line.as_str(), None),
+        };
+        let (base, query) = url.split_once('?').unwrap_or((url, ""));
+        let hash = |s: &str| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit());
+        let mut rev = query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("rev="))
+            .map(str::to_owned);
+        // `github:owner/repo/<rev>` and the like carry it in the path.
+        let source = match base.rsplit_once('/') {
+            Some((repo, last)) if hash(last) => {
+                rev = Some(last.to_owned());
+                repo
+            }
+            _ => base,
+        };
+        Self::Pinned {
+            source: source.to_owned(),
+            rev: rev.map(|r| r.chars().take(7).collect()),
+            // `path:` inputs have no history: nix dates them to the epoch.
+            date: date.filter(|d| *d != "1970-01-01").map(str::to_owned),
+        }
+    }
 }
 
 /// The inputs an "updating lock file" or "creating lock file" warning
@@ -42,34 +90,16 @@ pub fn lock_changes(plain: &str) -> Option<Vec<LockChange>> {
                 to: None,
             });
         } else if let Some(change) = changes.last_mut() {
-            let locked = |s: &str| short_revs(&s.replace('\'', ""));
             if let Some(to) = line.strip_prefix("→ ") {
-                change.to = Some(locked(to));
+                change.to = Some(Lock::parse(to));
             } else if change.verb == "Updated" {
-                change.from = Some(locked(line));
+                change.from = Some(Lock::parse(line));
             } else {
-                change.to = Some(locked(line));
+                change.to = Some(Lock::parse(line));
             }
         }
     }
     Some(changes)
-}
-
-/// `s` with every 40-digit commit hash cut to its first 7 digits.
-fn short_revs(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(start) = rest.find(|c: char| c.is_ascii_hexdigit()) {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start..];
-        let len = tail
-            .find(|c: char| !c.is_ascii_hexdigit())
-            .unwrap_or(tail.len());
-        out.push_str(if len == 40 { &tail[..7] } else { &tail[..len] });
-        rest = &tail[len..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// `secs` since the epoch as a UTC `YYYY-MM-DD HH:MM`.
@@ -192,7 +222,8 @@ fn inputs(graph: &Value, node: &Value, prefix: &str) -> Vec<TreeItem> {
             // A `follows` is the path of the input it reuses.
             if let Value::Array(path) = target {
                 let path: Vec<&str> = path.iter().filter_map(Value::as_str).collect();
-                label.push(ui::span(format!("  follows {}", path.join("/"))).style("muted"));
+                label.push(ui::span("  follows ").style("dim"));
+                label.push(ui::span(path.join("/")).style("muted"));
                 return TreeItem::new(id, label);
             }
             let Some(child) = target.as_str().and_then(|k| graph.get(k)) else {
@@ -295,10 +326,21 @@ mod tests {
             "warning: updating lock file '/tmp/f/flake.lock':\n\
              • Updated input 'nixpkgs':\n    'github:NixOS/nixpkgs/{}' (2026-10-01)\n  → 'github:NixOS/nixpkgs/{}' (2026-10-20)\n\
              • Added input 'a/b':\n    follows 'c'\n\
+             • Added input 'local':\n    'path:/nix/store/x-source?lastModified=0&narHash=sha256-x%3D' (1970-01-01)\n\
+             • Updated input 'tool':\n    'git+https://example.org/tool?ref=main&rev={}' (2026-09-01)\n  → 'git+https://example.org/tool?ref=main&rev={}' (2026-09-02)\n\
              • Removed input 'old'",
             rev('a'),
-            rev('b')
+            rev('b'),
+            rev('c'),
+            rev('d')
         );
+        let pinned = |source: &str, rev: Option<&str>, date: Option<&str>| {
+            Some(Lock::Pinned {
+                source: source.into(),
+                rev: rev.map(Into::into),
+                date: date.map(Into::into),
+            })
+        };
         let changes = lock_changes(&msg).expect("a lock file message");
         assert_eq!(
             changes,
@@ -306,14 +348,34 @@ mod tests {
                 LockChange {
                     verb: "Updated".into(),
                     input: "nixpkgs".into(),
-                    from: Some("github:NixOS/nixpkgs/aaaaaaa (2026-10-01)".into()),
-                    to: Some("github:NixOS/nixpkgs/bbbbbbb (2026-10-20)".into()),
+                    from: pinned("github:NixOS/nixpkgs", Some("aaaaaaa"), Some("2026-10-01")),
+                    to: pinned("github:NixOS/nixpkgs", Some("bbbbbbb"), Some("2026-10-20")),
                 },
                 LockChange {
                     verb: "Added".into(),
                     input: "a/b".into(),
                     from: None,
-                    to: Some("follows c".into()),
+                    to: Some(Lock::Follows("c".into())),
+                },
+                LockChange {
+                    verb: "Added".into(),
+                    input: "local".into(),
+                    from: None,
+                    to: pinned("path:/nix/store/x-source", None, None),
+                },
+                LockChange {
+                    verb: "Updated".into(),
+                    input: "tool".into(),
+                    from: pinned(
+                        "git+https://example.org/tool",
+                        Some("ccccccc"),
+                        Some("2026-09-01")
+                    ),
+                    to: pinned(
+                        "git+https://example.org/tool",
+                        Some("ddddddd"),
+                        Some("2026-09-02")
+                    ),
                 },
                 LockChange {
                     verb: "Removed".into(),

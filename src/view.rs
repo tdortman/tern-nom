@@ -9,6 +9,7 @@ use tern_sdk::{
 
 use crate::{
     diff::Package,
+    flake::{Lock, LockChange},
     nix::{store_name, strip_ansi},
     state::{Counts, DepNode, DrvStatus, Outcome, Severity, State},
 };
@@ -769,47 +770,109 @@ fn output(state: &State) -> Option<Node> {
     )
 }
 
-/// Inputs a lock file update added, updated or removed.
+/// One side of a lock change: revision and date, with the source when it
+/// differs from the row's.
+fn lock_cell(lock: Option<&Lock>, source: &str, style: &str) -> Vec<ui::Span> {
+    let Some(Lock::Pinned {
+        source: own,
+        rev,
+        date,
+    }) = lock
+    else {
+        return vec![ui::span("—").style("dim")];
+    };
+    let mut spans = Vec::new();
+    if own != source {
+        spans.push(ui::span(format!("{own} ")).style("muted"));
+    }
+    if let Some(rev) = rev {
+        spans.push(ui::span(rev).style(style));
+    }
+    if let Some(date) = date {
+        spans.push(ui::span(format!(" {date}")).style("dim"));
+    }
+    if spans.is_empty() {
+        spans.push(ui::span("—").style("dim"));
+    }
+    spans
+}
+
+/// Inputs a lock file update added, updated or removed, as a table: the
+/// source once, then the revision and its date before and after.
 fn lock_changes(state: &State) -> Option<Node> {
     if state.lock_changes.is_empty() {
         return None;
     }
-    let rows: Vec<Node> = state
-        .lock_changes
+    let rank = |c: &&LockChange| match c.verb.as_str() {
+        "Updated" => 0,
+        "Added" => 1,
+        _ => 2,
+    };
+    let mut changes: Vec<&LockChange> = state.lock_changes.iter().collect();
+    changes.sort_by_key(rank);
+    let mut table = ui::table()
+        .key("t")
+        .col(Column::new("s", "").priority(1.0))
+        .col(Column::new("n", "Input").truncate("start"))
+        .col(
+            Column::new("src", "Source")
+                .grow(1.0)
+                .truncate("middle")
+                .priority(2.0),
+        )
+        .col(Column::new("o", "Before").priority(3.0))
+        .col(Column::new("w", "After"));
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for (i, c) in changes.iter().enumerate() {
+        match counts.iter_mut().find(|(verb, _)| *verb == c.verb) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((c.verb.clone(), 1)),
+        }
+        let tone = match c.verb.as_str() {
+            "Added" => "success",
+            "Removed" => "error",
+            _ => "accent",
+        };
+        // A nested input reads by its own name; the path to it is context.
+        let mut name = Vec::new();
+        if let Some((parent, leaf)) = c.input.rsplit_once('/') {
+            name.push(ui::span(format!("{parent}/")).style("dim"));
+            name.push(ui::span(leaf).style("strong"));
+        } else {
+            name.push(ui::span(&c.input).style("strong"));
+        }
+        let lock = c.to.as_ref().or(c.from.as_ref());
+        let (source, source_cell) = match lock {
+            Some(Lock::Pinned { source, .. }) => {
+                (source.as_str(), vec![ui::span(source).style("muted")])
+            }
+            Some(Lock::Follows(target)) => (
+                "",
+                vec![
+                    ui::span("follows ").style("dim"),
+                    ui::span(target).style("muted"),
+                ],
+            ),
+            None => ("", vec![ui::span("—").style("dim")]),
+        };
+        table = table.row(
+            TableRow::new(i.to_string())
+                .cell("s", ui::span(c.verb.to_lowercase()).style(tone))
+                .cell("n", name)
+                .cell("src", source_cell)
+                .cell("o", lock_cell(c.from.as_ref(), source, "muted"))
+                .cell("w", lock_cell(c.to.as_ref(), source, "")),
+        );
+    }
+    let summary: Vec<String> = counts
         .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let tone = match c.verb.as_str() {
-                "Added" => "success",
-                "Removed" => "warning",
-                _ => "info",
-            };
-            let mut spans = vec![ui::span(&c.input).style("strong")];
-            if let Some(from) = &c.from {
-                spans.push(ui::span(format!("  {from}")).style("muted"));
-                spans.push(ui::span(" → ").style("dim"));
-            } else {
-                spans.push(ui::span("  "));
-            }
-            if let Some(to) = &c.to {
-                spans.push(ui::span(to));
-            }
-            ui::row()
-                .gap("sm")
-                .align("center")
-                .key(i.to_string())
-                .children(nodes![
-                    ui::badge(c.verb.to_lowercase()).tone(tone).key("v"),
-                    ui::text(spans).key("t").grow(1.0),
-                ])
-                .into()
-        })
+        .map(|(verb, n)| format!("{n} {}", verb.to_lowercase()))
         .collect();
     Some(
         ui::section()
-            .head(format!("Lock file · {} changed", rows.len()))
+            .head(format!("Lock file · {}", summary.join(", ")))
             .key("lock")
-            .children(rows)
+            .child(table)
             .into(),
     )
 }

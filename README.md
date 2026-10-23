@@ -20,7 +20,8 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
   Subtrees stay folded unless something in them failed, and you can open or fold any of them.
 - Warnings in a folded section, one line each.
   A warning nix prints several times shows once with a count, store paths are cut down to the package name, and quoted option names show as code.
-- After `nom flake update` or `nom flake lock`, each input that was added, updated, or removed, with its old and new revision.
+- After `nom flake update` or `nom flake lock`, a table of the inputs that were updated, added, or removed: each input's source, and its revision and date before and after.
+  A nested input's parent path and a `follows` are dimmed, so the input's own name stands out.
 - The paths fetched from caches, in a folded section.
 - Build logs stay hidden. Click a running build's row to show the last 8 lines of its log under the row, and click again to hide it.
   The button above those lines expands them to the last 200 lines, in a box that scrolls.

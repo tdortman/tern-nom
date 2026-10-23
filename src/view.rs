@@ -58,6 +58,10 @@ const SETTLE: Duration = Duration::from_secs(1);
 /// Build log lines sent to the window.
 const LOG_TAIL: usize = 60;
 
+/// Flake inputs shown while nix fetches them: the current one and the last
+/// few done, so the card does not grow with every input.
+const INPUT_ROWS: usize = 4;
+
 /// Lines of a clicked build's log shown before "N more lines" expands it.
 const PREVIEW: u32 = 8;
 
@@ -772,23 +776,32 @@ fn output(state: &State) -> Option<Node> {
     )
 }
 
-/// The flake inputs nix fetched so far, one per row, while it runs: done
-/// ones checked, the current one with its download.
+/// The flake inputs nix fetched, one per row: done ones checked, the current
+/// one with its download. While nix runs only the last few show, so the
+/// card keeps its height; once it ends they fold into one line.
 fn fetch_inputs(state: &State) -> Option<Node> {
-    if state.inputs.is_empty() || state.outcome.is_some() {
+    if state.inputs.is_empty() {
         return None;
     }
-    let done = state.inputs.iter().filter(|i| i.done).count();
+    let running = state.outcome.is_none();
+    let skip = if running {
+        state.inputs.len().saturating_sub(INPUT_ROWS)
+    } else {
+        0
+    };
+    let done = state.inputs.iter().filter(|i| i.done || !running).count();
     let rows: Vec<Node> = state
         .inputs
         .iter()
         .enumerate()
+        .skip(skip)
         .map(|(i, input)| {
+            let input_done = input.done || !running;
             let (kind, rest) = input
                 .reference
                 .split_once(':')
                 .unwrap_or(("", &input.reference));
-            let indicator: Node = if input.done {
+            let indicator: Node = if input_done {
                 ui::icon("check").tone("success").key("s").into()
             } else {
                 ui::spinner()
@@ -801,7 +814,7 @@ fn fetch_inputs(state: &State) -> Option<Node> {
                 indicator,
                 ui::text(vec![
                     ui::span(format!("{kind}:")).style("dim"),
-                    ui::span(rest).style(if input.done { "muted" } else { "strong" }),
+                    ui::span(rest).style(if input_done { "muted" } else { "strong" }),
                 ])
                 .truncate("end")
                 .wrap("none")
@@ -813,7 +826,7 @@ fn fetch_inputs(state: &State) -> Option<Node> {
             let unpacking = input
                 .downloaded
                 .is_some_and(|t| t.elapsed() >= Duration::from_secs(1));
-            if input.done {
+            if input_done {
             } else if unpacking {
                 let text = if input.bytes > 0 {
                     format!("{} · unpacking", size(input.bytes))
@@ -851,6 +864,8 @@ fn fetch_inputs(state: &State) -> Option<Node> {
     Some(
         ui::section()
             .head(format!("Inputs · {done} fetched"))
+            .collapsible(!running)
+            .collapsed(!running)
             .key("inputs")
             .children(rows)
             .into(),

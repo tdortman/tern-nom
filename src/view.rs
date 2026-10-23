@@ -128,7 +128,8 @@ fn count_badges(c: Counts, label: &str, key: &str, finished: bool) -> Vec<Node> 
     out
 }
 
-/// The header row: activity, counts, timer.
+/// The header: activity word, counts and timer, then while nix runs what it
+/// is doing on a line of its own.
 fn summary(state: &State) -> Node {
     let mut row: Vec<Node> = Vec::new();
     match state.outcome {
@@ -184,29 +185,30 @@ fn summary(state: &State) -> Node {
         };
         row.push(ui::badge(label).tone("warning").key("warn").into());
     }
-    // nix's current activity changes every frame, so it takes the spare
-    // width after the badges instead of moving them.
-    let activity = state.activity.as_deref().map(shorten).unwrap_or_default();
-    row.push(
-        ui::text(ui::span(activity).style("muted"))
-            .truncate("end")
-            .wrap("none")
-            .grow(1.0)
-            .shrink(1.0)
-            .key("sp")
-            .into(),
-    );
+    row.push(ui::spacer().grow(1.0).key("sp").into());
     let mut timer = ui::elapsed().age(ms(state.started.elapsed()));
     if let Some((_, d)) = state.outcome {
         timer = timer.stopped(u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
     }
     row.push(timer.key("t").into());
-    ui::row()
+    let head: Node = ui::row()
         .gap("sm")
         .align("center")
         .key("sum")
         .children(row)
-        .into()
+        .into();
+    if state.outcome.is_some() {
+        return head;
+    }
+    // A store path and the cache it is checked on: cut in the middle so
+    // both ends stay. The line stays while nix is quiet, so the card does
+    // not jump each time an activity starts or stops.
+    let activity = state.activity.as_deref().map(shorten);
+    let line = ui::text(ui::span(activity.unwrap_or_else(|| "\u{a0}".to_owned())).style("muted"))
+        .truncate("middle")
+        .wrap("none")
+        .key("act");
+    ui::col().key("head").children(nodes![head, line]).into()
 }
 
 /// Builds or copies that have run long enough to get a row: the many that

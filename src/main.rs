@@ -4,6 +4,8 @@
 //! become a live Tern card; everything else, and every run outside Tern,
 //! is handed to the real nix-output-monitor named by `TERN_NOM_REAL`.
 
+mod drv;
+mod history;
 mod nix;
 mod state;
 mod tty;
@@ -29,6 +31,9 @@ const FRAME: Duration = Duration::from_millis(100);
 
 /// How long one wait for terminal input lasts.
 const POLL: Duration = Duration::from_millis(30);
+
+/// How often running builds' timers and estimates are redrawn.
+const TICK: Duration = Duration::from_secs(1);
 
 /// Set by SIGINT/SIGTERM.
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -164,7 +169,8 @@ fn monitor(
     }
 
     let sf = session.open(SurfaceOptions::flow().title(title.clone()))?;
-    let mut state = State::new();
+    let reader: state::DrvReader = Box::new(|path| std::fs::read_to_string(path).ok());
+    let mut state = State::new(history::History::load(), reader);
     session.render(sf, view::view(&state, &title))?;
     let mut last = Instant::now();
     let mut dirty = false;
@@ -192,7 +198,9 @@ fn monitor(
         if ended {
             break;
         }
-        if dirty && last.elapsed() >= FRAME {
+        // Tree timers and estimate bars are text, so redraw while builds run.
+        let tick = !state.builds.is_empty() && last.elapsed() >= TICK;
+        if (dirty && last.elapsed() >= FRAME) || tick {
             session.render(sf, view::view(&state, &title))?;
             last = Instant::now();
             dirty = false;
@@ -207,6 +215,9 @@ fn monitor(
     }
     session.render(sf, view::view(&state, &title))?;
     session.close()?;
+    if let Err(e) = state.history.save() {
+        eprintln!("tern-nom: cannot save build times to nom's history: {e}");
+    }
 
     if let Some(bytes) = stdout.and_then(|h| h.join().ok()) {
         let mut out = io::stdout().lock();

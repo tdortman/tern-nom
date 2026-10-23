@@ -5,9 +5,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::nix::{
-    Line, Message, act, drv_paths, num_field, res, store_name, str_field, strip_ansi,
+use crate::{
+    drv::{self, DrvInfo},
+    history::{History, report_name},
+    nix::{Line, Message, act, drv_paths, num_field, res, store_name, str_field, strip_ansi},
 };
+
+/// Reads a `.drv` file's text by path.
+pub type DrvReader = Box<dyn Fn(&str) -> Option<String>>;
 
 /// Build log lines kept for the log view.
 const LOG_LINES: usize = 400;
@@ -25,6 +30,8 @@ pub struct Build {
     pub phase: Option<String>,
     /// The last non-empty line it printed, without escapes.
     pub last_line: Option<String>,
+    /// How long it took before, per nom's history.
+    pub estimate: Option<Duration>,
 }
 
 /// A store path being copied or substituted.
@@ -51,6 +58,8 @@ pub struct Finished {
     pub name: String,
     /// How long it ran.
     pub took: Duration,
+    /// The remote builder, if not local (builds only).
+    pub machine: Option<String>,
     /// Whether nix reported it failed.
     pub failed: bool,
     /// Bytes copied (copies only).
@@ -123,8 +132,29 @@ pub enum Outcome {
     Cancelled,
 }
 
+/// Where a planned derivation is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrvStatus {
+    /// Not started.
+    Waiting,
+    /// Building as this activity.
+    Building(u64),
+    /// Built in this time.
+    Built(Duration),
+    /// Its builder failed.
+    Failed,
+}
+
+/// A planned derivation and the planned derivations it needs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DepNode<'a> {
+    /// Its `.drv` path.
+    pub drv: &'a str,
+    /// Its planned inputs (each derivation appears once in the whole tree).
+    pub children: Vec<DepNode<'a>>,
+}
+
 /// Everything known about the invocation so far.
-#[derive(Debug)]
 pub struct State {
     /// The type of every running activity, by id.
     kinds: HashMap<u64, u32>,
@@ -160,11 +190,21 @@ pub struct State {
     pub started: Instant,
     /// How long it took and how it ended, once it ended.
     pub outcome: Option<(Outcome, Duration)>,
+    /// Derivations nix will build, in the order it named them.
+    pub planned: Vec<String>,
+    /// What each planned `.drv` file says, `None` when unreadable.
+    infos: HashMap<String, Option<DrvInfo>>,
+    /// Inside nix's "these derivations will be built" listing.
+    in_plan: bool,
+    /// Reads `.drv` files.
+    read_drv: DrvReader,
+    /// nom's build-time history.
+    pub history: History,
 }
 
 impl State {
     /// An invocation that starts now.
-    pub fn new() -> Self {
+    pub fn new(history: History, read_drv: DrvReader) -> Self {
         Self {
             kinds: HashMap::new(),
             starts: HashMap::new(),
@@ -183,6 +223,11 @@ impl State {
             activity_id: 0,
             started: Instant::now(),
             outcome: None,
+            planned: Vec::new(),
+            infos: HashMap::new(),
+            in_plan: false,
+            read_drv,
+            history,
         }
     }
 
@@ -225,6 +270,8 @@ impl State {
                     .filter(|m| !m.is_empty())
                     .map(str::to_owned);
                 let name = store_name(&drv).to_owned();
+                self.plan(&drv);
+                let estimate = self.estimate(&drv, machine.as_deref());
                 self.starts.insert(id, Instant::now());
                 self.builds.insert(
                     id,
@@ -234,6 +281,7 @@ impl State {
                         machine,
                         phase: None,
                         last_line: None,
+                        estimate,
                     },
                 );
             }
@@ -285,6 +333,7 @@ impl State {
                 path: build.drv,
                 name: build.name,
                 took,
+                machine: build.machine,
                 failed,
                 bytes: 0,
             });
@@ -295,6 +344,7 @@ impl State {
                 path: copy.path,
                 name: copy.name,
                 took,
+                machine: None,
                 failed: false,
                 bytes,
             });
@@ -353,11 +403,21 @@ impl State {
 
     /// A log message.
     fn note(&mut self, level: u8, text: String) {
+        let plain = strip_ansi(&text);
+        for line in plain.lines() {
+            let line = line.trim();
+            if line.contains(" will be built") {
+                self.in_plan = true;
+            } else if self.in_plan && line.starts_with('/') && line.ends_with(".drv") {
+                self.plan(line);
+            } else {
+                self.in_plan = false;
+            }
+        }
         // Levels above notice are nix's own progress chatter under `-v`.
         if level > 2 {
             return;
         }
-        let plain = strip_ansi(&text);
         let head = plain.trim_start();
         let severity = if level == 0 && head.starts_with("error") {
             Severity::Error
@@ -395,12 +455,23 @@ impl State {
         self.log.push_back(line);
     }
 
-    /// Build counts: nix's own when it reports them, else what was seen.
+    /// Build counts: from the plan and what was seen when nix listed one,
+    /// else nix's own counts (which can stop updating before the last build
+    /// ends), else what was seen.
     pub fn build_counts(&self) -> Counts {
+        let failed = self.built.iter().filter(|b| b.failed).count() as u64;
+        let done = self.built.len() as u64 - failed;
+        let running = self.builds.len() as u64;
+        if !self.planned.is_empty() {
+            let expected = (self.planned.len() as u64).max(done + failed + running);
+            return Counts {
+                done,
+                expected,
+                running,
+                failed,
+            };
+        }
         if self.build_counts.is_empty() {
-            let failed = self.built.iter().filter(|b| b.failed).count() as u64;
-            let done = self.built.len() as u64 - failed;
-            let running = self.builds.len() as u64;
             return Counts {
                 done,
                 expected: done + failed + running,
@@ -471,6 +542,110 @@ impl State {
             other => other,
         };
         self.outcome = Some((outcome, self.started.elapsed()));
+        // Failures arrive after a build stops, so only now is "built" final.
+        let runs: Vec<_> = self
+            .built
+            .iter()
+            .filter(|b| !b.failed)
+            .map(|b| {
+                (
+                    b.machine.clone().unwrap_or_default(),
+                    self.report_name(&b.path),
+                    b.took.as_secs(),
+                )
+            })
+            .collect();
+        for (host, name, secs) in runs {
+            self.history.record(&host, &name, secs);
+        }
+    }
+
+    /// Adds `drv` to the plan and reads its file once.
+    fn plan(&mut self, drv: &str) {
+        if self.infos.contains_key(drv) {
+            return;
+        }
+        let info = (self.read_drv)(drv).and_then(|text| drv::parse(&text));
+        self.infos.insert(drv.to_owned(), info);
+        self.planned.push(drv.to_owned());
+    }
+
+    /// nom's history key for `drv`.
+    fn report_name(&self, drv: &str) -> String {
+        let pname = self
+            .infos
+            .get(drv)
+            .and_then(Option::as_ref)
+            .and_then(|i| i.pname.as_deref());
+        report_name(pname, store_name(drv))
+    }
+
+    /// How long `drv` took before on `machine` (`None`: this machine).
+    pub fn estimate(&self, drv: &str, machine: Option<&str>) -> Option<Duration> {
+        self.history
+            .estimate(machine.unwrap_or_default(), &self.report_name(drv))
+            .map(Duration::from_secs)
+    }
+
+    /// Where `drv` is.
+    pub fn status(&self, drv: &str) -> DrvStatus {
+        if let Some((&id, _)) = self.builds.iter().find(|(_, b)| b.drv == drv) {
+            return DrvStatus::Building(id);
+        }
+        match self.built.iter().rev().find(|b| b.path == drv) {
+            Some(b) if b.failed => DrvStatus::Failed,
+            Some(b) => DrvStatus::Built(b.took),
+            None => DrvStatus::Waiting,
+        }
+    }
+
+    /// The planned derivations as a tree from what was asked for down to its
+    /// planned inputs; a derivation several others need shows under the first.
+    pub fn dependency_tree(&self) -> Vec<DepNode<'_>> {
+        let inputs = |drv: &str| -> Vec<&str> {
+            let mut out: Vec<&str> = self
+                .infos
+                .get(drv)
+                .and_then(Option::as_ref)
+                .map(|i| {
+                    i.inputs
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|d| self.infos.contains_key(*d))
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.sort_by_key(|d| store_name(d));
+            out
+        };
+        let needed: HashSet<&str> = self.planned.iter().flat_map(|d| inputs(d)).collect();
+        let mut roots: Vec<&str> = self
+            .planned
+            .iter()
+            .map(String::as_str)
+            .filter(|d| !needed.contains(d))
+            .collect();
+        roots.sort_by_key(|d| store_name(d));
+
+        fn walk<'a>(
+            drv: &'a str,
+            inputs: &dyn Fn(&str) -> Vec<&'a str>,
+            seen: &mut HashSet<&'a str>,
+        ) -> DepNode<'a> {
+            let children = inputs(drv)
+                .into_iter()
+                .filter(|d| seen.insert(d))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|d| walk(d, inputs, seen))
+                .collect();
+            DepNode { drv, children }
+        }
+        let mut seen: HashSet<&str> = roots.iter().copied().collect();
+        roots
+            .into_iter()
+            .map(|r| walk(r, &inputs, &mut seen))
+            .collect()
     }
 }
 
@@ -478,13 +653,55 @@ impl State {
 mod tests {
     use super::*;
 
+    /// `.drv` files for the fixtures' graph: `top` needs `c`, `c` needs `a`
+    /// and `b`, and each sets `pname` to its first name part.
+    fn reader(log: &str) -> DrvReader {
+        let mut drvs: Vec<String> = log
+            .lines()
+            .flat_map(|l| drv_paths(l).map(str::to_owned).collect::<Vec<_>>())
+            .collect();
+        drvs.sort_unstable();
+        drvs.dedup();
+        Box::new(move |path| {
+            let pname = store_name(path).split('-').next()?;
+            let wanted: &[&str] = match pname {
+                "top" => &["c"],
+                "c" => &["a", "b"],
+                _ => &[],
+            };
+            let inputs: Vec<String> = drvs
+                .iter()
+                .filter(|d| {
+                    wanted
+                        .iter()
+                        .any(|w| store_name(d).starts_with(&format!("{w}-")))
+                })
+                .map(|d| format!(r#"("{d}",["out"])"#))
+                .collect();
+            Some(format!(
+                r#"Derive([],[{}],[],"x86_64-linux","/bin/sh",[],[("pname","{pname}")])"#,
+                inputs.join(",")
+            ))
+        })
+    }
+
     /// Feeds a captured log.
     fn feed(log: &str) -> State {
-        let mut state = State::new();
+        let mut state = State::new(History::default(), reader(log));
         for line in log.lines() {
             state.apply(Line::parse(line));
         }
         state
+    }
+
+    /// The tree as `name[children]` strings.
+    fn shape(node: &DepNode<'_>) -> String {
+        let kids: Vec<String> = node.children.iter().map(shape).collect();
+        format!(
+            "{}[{}]",
+            store_name(node.drv).split('-').next().unwrap_or_default(),
+            kids.join(",")
+        )
     }
 
     /// `nix-build -v --log-format internal-json` (Lix 2.96) of four
@@ -493,6 +710,25 @@ mod tests {
 
     /// The same where one builder exits 3, failing its dependent.
     const FAILURE: &str = include_str!("../tests/lix-failure.log");
+
+    #[test]
+    fn plan_becomes_a_dependency_tree_with_statuses() {
+        let mut state = feed(FAILURE);
+        // Planned from nix's listing before any build started.
+        assert_eq!(state.planned.len(), 4);
+        let tree = state.dependency_tree();
+        assert_eq!(
+            tree.iter().map(shape).collect::<Vec<_>>(),
+            ["top[c[a[],b[]]]"]
+        );
+        let c = tree[0].children[0].drv;
+        let a = tree[0].children[0].children[0].drv;
+        assert!(matches!(state.status(a), DrvStatus::Built(_)));
+        assert_eq!(state.status(c), DrvStatus::Failed);
+        assert_eq!(state.status(tree[0].drv), DrvStatus::Waiting);
+        state.finish(Outcome::Done);
+        assert_eq!(state.outcome.map(|o| o.0), Some(Outcome::Failed));
+    }
 
     #[test]
     fn successful_build_counts_builds_copies_and_bytes() {

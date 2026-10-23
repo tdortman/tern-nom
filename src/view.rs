@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use tern_sdk::{
     nodes,
-    ui::{self, Bound, Extent, Node, Status, View},
+    ui::{self, Bound, Extent, Node, Status, TreeItem, View},
 };
 
-use crate::state::{Counts, Outcome, Severity, State};
+use crate::{
+    nix::store_name,
+    state::{Counts, DepNode, DrvStatus, Outcome, Severity, State},
+};
 
 /// Running builds or copies listed before the rest fold into "+N more".
 const ROWS: usize = 8;
@@ -184,6 +187,23 @@ fn running_builds(state: &State) -> Option<Node> {
                 .key("l")
                 .into(),
         );
+        // nom's estimate from earlier builds of the same package.
+        if let Some(est) = b.estimate.filter(|e| !e.is_zero()) {
+            let elapsed = state.started_ago(id);
+            let label = match est.checked_sub(elapsed) {
+                Some(left) => format!("~{} left", took(left)),
+                None => format!("over ~{}", took(est)),
+            };
+            row.push(
+                ui::progress()
+                    .value((elapsed.as_secs_f64() / est.as_secs_f64()).min(0.99))
+                    .label(label)
+                    .tone("accent")
+                    .min(Bound::w(Extent::Ch(24.0)))
+                    .key("e")
+                    .into(),
+            );
+        }
         let mut timer = ui::elapsed().age(ms(state.started_ago(id)));
         if state.outcome.is_some() {
             timer =
@@ -300,37 +320,107 @@ fn notes(state: &State) -> Vec<Node> {
         .collect()
 }
 
-/// Builds that ended (failed first), in a section folded once all is well.
-fn finished(state: &State) -> Option<Node> {
-    if state.built.is_empty() && state.copied.is_empty() {
+/// Order among siblings: what needs attention first.
+fn rank(status: DrvStatus) -> u8 {
+    match status {
+        DrvStatus::Failed => 0,
+        DrvStatus::Building(_) => 1,
+        DrvStatus::Waiting => 2,
+        DrvStatus::Built(_) => 3,
+    }
+}
+
+/// One derivation and its planned inputs; whether anything in it builds or
+/// failed, which keeps it open.
+fn dep_item(state: &State, node: &DepNode<'_>) -> (TreeItem, bool) {
+    let status = state.status(node.drv);
+    let (icon, style, detail) = match status {
+        DrvStatus::Waiting if state.outcome.is_some() => ("minus", "muted", "not built".to_owned()),
+        DrvStatus::Waiting => (
+            "clock",
+            "muted",
+            state
+                .estimate(node.drv, None)
+                .map(|e| format!("~{}", took(e)))
+                .unwrap_or_default(),
+        ),
+        DrvStatus::Building(id) => {
+            let build = state.builds.get(&id);
+            let phase = build.and_then(|b| b.phase.as_deref()).unwrap_or("building");
+            let mut detail = format!("{phase} · {}", took(state.started_ago(id)));
+            if let Some(est) = build.and_then(|b| b.estimate) {
+                detail.push_str(&format!(" / ~{}", took(est)));
+            }
+            if let Some(machine) = build.and_then(|b| b.machine.as_deref()) {
+                detail.push_str(&format!(" · {machine}"));
+            }
+            ("play", "accent", detail)
+        }
+        DrvStatus::Built(d) => ("check", "success", took(d)),
+        DrvStatus::Failed => ("x", "error", "failed".to_owned()),
+    };
+    let mut kids: Vec<_> = node.children.iter().collect();
+    kids.sort_by_key(|k| rank(state.status(k.drv)));
+    let mut active = matches!(status, DrvStatus::Building(_) | DrvStatus::Failed);
+    let mut children = Vec::with_capacity(kids.len());
+    for kid in kids {
+        let (item, kid_active) = dep_item(state, kid);
+        active |= kid_active;
+        children.push(item);
+    }
+    let label = vec![
+        ui::span(store_name(node.drv)).style(format!("{style} strong")),
+        ui::span(format!("  {detail}")).style("muted"),
+    ];
+    let mut item = TreeItem::new(node.drv, label);
+    item.icon = Some(icon.into());
+    if !children.is_empty() {
+        item.children = children;
+        item = item.open(active);
+    }
+    (item, active)
+}
+
+/// What nix builds, as a tree from what was asked for down to its inputs.
+fn deps(state: &State) -> Option<Node> {
+    let roots = state.dependency_tree();
+    if roots.is_empty() {
         return None;
     }
-    let failed = state.failed_builds();
-    let mut rows: Vec<Node> = Vec::new();
-    let mut built: Vec<_> = state.built.iter().enumerate().collect();
-    built.sort_by_key(|(_, b)| !b.failed);
-    for (i, b) in built {
-        let (icon, tone) = if b.failed {
-            ("x", "error")
+    let only_root = roots.len() == 1;
+    let mut tree = ui::tree().key("t");
+    for root in &roots {
+        let (item, active) = dep_item(state, root);
+        let open = active || only_root;
+        tree = tree.item(if item.children.is_empty() {
+            item
         } else {
-            ("check", "success")
-        };
-        rows.push(
-            ui::row()
-                .gap("sm")
-                .key(format!("b{i}"))
-                .children(nodes![
-                    ui::icon(icon).tone(tone).key("i"),
-                    ui::text(ui::span(&b.name).style(if b.failed { "error" } else { "strong" }))
-                        .key("n")
-                        .grow(1.0),
-                    ui::text(ui::span(took(b.took)).style("muted")).key("t"),
-                ])
-                .into(),
-        );
+            item.open(open)
+        });
     }
-    for (i, c) in state.copied.iter().enumerate() {
-        rows.push(
+    let built = state.built.iter().filter(|b| !b.failed).count();
+    let head = format!("Derivations · {built}/{} built", state.planned.len());
+    Some(
+        ui::section()
+            .head(head)
+            .collapsible(true)
+            .collapsed(matches!(state.outcome, Some((Outcome::Done, _))))
+            .key("deps")
+            .child(tree)
+            .into(),
+    )
+}
+
+/// Paths fetched from caches, folded.
+fn fetched(state: &State) -> Option<Node> {
+    if state.copied.is_empty() {
+        return None;
+    }
+    let rows: Vec<Node> = state
+        .copied
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
             ui::row()
                 .gap("sm")
                 .key(format!("c{i}"))
@@ -339,21 +429,20 @@ fn finished(state: &State) -> Option<Node> {
                     ui::text(&c.name).key("n").grow(1.0),
                     ui::text(ui::span(size(c.bytes)).style("muted")).key("s"),
                 ])
-                .into(),
-        );
-    }
-    let head = format!(
-        "Done · {} built, {} fetched",
-        state.built.len() - failed,
-        state.copied.len()
-    );
+                .into()
+        })
+        .collect();
+    let bytes: u64 = state.copied.iter().map(|c| c.bytes).sum();
     Some(
         ui::section()
-            .head(head)
+            .head(format!(
+                "Fetched · {} paths, {}",
+                state.copied.len(),
+                size(bytes)
+            ))
             .collapsible(true)
-            .collapsed(failed == 0)
-            .key("done")
-            .max(Bound::h(Extent::Lines(20.0)))
+            .collapsed(true)
+            .key("fetched")
             .children(rows)
             .into(),
     )
@@ -401,7 +490,8 @@ pub fn view(state: &State, title: &str) -> View {
     body.extend(running_builds(state));
     body.extend(running_copies(state));
     body.extend(notes(state));
-    body.extend(finished(state));
+    body.extend(deps(state));
+    body.extend(fetched(state));
     body.extend(log(state));
     View::new().main([ui::card()
         .head(ui::span(title).style("mono"))

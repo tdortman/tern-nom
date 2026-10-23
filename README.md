@@ -2,19 +2,30 @@
 
 [nix-output-monitor](https://github.com/maralorn/nix-output-monitor) (`nom`) for the [Tern](https://stencil.so/tern) terminal.
 In a Tern pane, `nom build` and anything that pipes into `nom --json`, such as `nh os switch`, show a native card instead of nom's text table.
-The card shows running builds, downloads, errors, and the build log.
+The card shows the dependency tree, running builds with estimated progress, downloads, errors, and the build log.
 Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 
 ## What the card shows
 
 - Built and fetched counts, an overall progress bar, and a timer.
 - One row per running build, with its stdenv phase, its last output line, and how long it has run.
+  If nom has timed the same package before, the row also has a progress bar against that estimate.
 - One row per download, with a byte progress bar.
 - Errors and warnings as nix prints them.
-- The finished builds, failed ones first. The section folds when nothing failed.
+- The derivations nix builds, as a tree from what you asked for down to its inputs.
+  Each one shows whether it is waiting, building, built, or failed, with its time.
+  A subtree stays open while something in it builds or has failed, and you can fold any of them.
+- The paths fetched from caches, in a folded section.
 - The tail of the build log, which folds once the build succeeds.
 
 Ctrl+C stops nix as usual. The card then reads Cancelled and `nom` exits with 130.
+
+## Build-time estimates
+
+tern-nom reads and writes nom's own history, `$XDG_STATE_HOME/nix-output-monitor/build-reports.csv`.
+It uses the same columns, lock file, and limit of 10 runs per package as nom.
+The estimate for a build is the median of its recorded runs, as in nom.
+Your existing nom history gives estimates from the first run, and builds timed by either program improve both.
 
 ## Install
 
@@ -63,7 +74,8 @@ cargo nextest run
 nix fmt
 ```
 
-`tests/` holds two captured Lix logs, one build that succeeds and one that fails. The tests replay them through the parser.
+`tests/` holds two captured Lix logs, one build that succeeds and one that fails.
+The tests replay them through the parser and check the counts, the dependency tree, and which build failed.
 
 ## License
 

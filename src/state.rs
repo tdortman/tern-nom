@@ -14,7 +14,7 @@ use crate::{
 /// Reads a `.drv` file's text by path.
 pub type DrvReader = Box<dyn Fn(&str) -> Option<String>>;
 
-/// Build log lines kept for the log view.
+/// Log lines kept per build.
 const LOG_LINES: usize = 400;
 
 /// A derivation being built.
@@ -84,6 +84,8 @@ pub struct Note {
     pub severity: Severity,
     /// The message, with ANSI colors.
     pub text: String,
+    /// How often nix printed it.
+    pub count: usize,
 }
 
 /// `[done, expected, running, failed]` of a counting activity.
@@ -130,6 +132,14 @@ pub enum Outcome {
     Failed,
     /// The user interrupted it.
     Cancelled,
+}
+
+/// Which of nix's plan listings message lines belong to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Listing {
+    None,
+    Builds,
+    Fetches,
 }
 
 /// Where a planned derivation is.
@@ -180,8 +190,11 @@ pub struct State {
     failed_drvs: HashSet<String>,
     /// Errors, warnings and traces.
     pub notes: Vec<Note>,
-    /// The latest build output, `name> line`.
-    pub log: VecDeque<String>,
+    /// Each build's output by `.drv` path; `""` holds output from outside
+    /// builds.
+    pub logs: HashMap<String, VecDeque<String>>,
+    /// The key of the log that last printed.
+    pub last_log: String,
     /// What nix does outside builds and copies (evaluation, queries).
     pub activity: Option<String>,
     /// The id of the activity `activity` describes.
@@ -194,8 +207,13 @@ pub struct State {
     pub planned: Vec<String>,
     /// What each planned `.drv` file says, `None` when unreadable.
     infos: HashMap<String, Option<DrvInfo>>,
-    /// Inside nix's "these derivations will be built" listing.
-    in_plan: bool,
+    /// Which of nix's "will be built" / "will be fetched" listings the
+    /// current message lines belong to.
+    listing: Listing,
+    /// Whether nix listed what it will build or fetch.
+    saw_plan: bool,
+    /// Paths nix said it will fetch.
+    planned_fetches: u64,
     /// Reads `.drv` files.
     read_drv: DrvReader,
     /// nom's build-time history.
@@ -218,14 +236,17 @@ impl State {
             copied_bytes: 0,
             failed_drvs: HashSet::new(),
             notes: Vec::new(),
-            log: VecDeque::new(),
+            logs: HashMap::new(),
+            last_log: String::new(),
             activity: None,
             activity_id: 0,
             started: Instant::now(),
             outcome: None,
             planned: Vec::new(),
             infos: HashMap::new(),
-            in_plan: false,
+            listing: Listing::None,
+            saw_plan: false,
+            planned_fetches: 0,
             read_drv,
             history,
         }
@@ -237,7 +258,7 @@ impl State {
             Line::Nix(msg) => self.message(msg),
             Line::Text(text) => {
                 if !text.trim().is_empty() {
-                    self.push_log(text);
+                    self.push_log("", text);
                 }
             }
         }
@@ -309,6 +330,8 @@ impl State {
             act::COPY_PATHS => {
                 self.copy_counts.insert(id, Counts::default());
             }
+            // NAR and narinfo downloads: their copy or query says it better.
+            act::FILE_TRANSFER => {}
             _ if !text.is_empty() => {
                 self.activity = Some(text.to_owned());
                 self.activity_id = id;
@@ -358,17 +381,15 @@ impl State {
                 let Some(line) = str_field(fields, 0) else {
                     return;
                 };
-                if let Some(build) = self.builds.get_mut(&id) {
+                let drv = self.builds.get_mut(&id).map(|build| {
                     let plain = strip_ansi(line);
                     let plain = plain.trim();
                     if !plain.is_empty() {
                         build.last_line = Some(plain.to_owned());
                     }
-                    let entry = format!("\x1b[2m{}>\x1b[0m {line}", build.name);
-                    self.push_log(entry);
-                } else {
-                    self.push_log(line.to_owned());
-                }
+                    build.drv.clone()
+                });
+                self.push_log(drv.as_deref().unwrap_or_default(), line.to_owned());
             }
             res::SET_PHASE => {
                 if let (Some(build), Some(phase)) = (self.builds.get_mut(&id), str_field(fields, 0))
@@ -407,11 +428,20 @@ impl State {
         for line in plain.lines() {
             let line = line.trim();
             if line.contains(" will be built") {
-                self.in_plan = true;
-            } else if self.in_plan && line.starts_with('/') && line.ends_with(".drv") {
+                self.listing = Listing::Builds;
+                self.saw_plan = true;
+            } else if line.contains(" will be fetched") {
+                self.listing = Listing::Fetches;
+                self.saw_plan = true;
+            } else if line.starts_with('/')
+                && self.listing == Listing::Builds
+                && line.ends_with(".drv")
+            {
                 self.plan(line);
+            } else if line.starts_with('/') && self.listing == Listing::Fetches {
+                self.planned_fetches += 1;
             } else {
-                self.in_plan = false;
+                self.listing = Listing::None;
             }
         }
         // Levels above notice are nix's own progress chatter under `-v`.
@@ -432,7 +462,14 @@ impl State {
         if severity == Severity::Error {
             self.mark_failed(&plain);
         }
-        self.notes.push(Note { severity, text });
+        match self.notes.iter_mut().find(|n| n.text == text) {
+            Some(seen) => seen.count += 1,
+            None => self.notes.push(Note {
+                severity,
+                text,
+                count: 1,
+            }),
+        }
     }
 
     /// Marks builds an error names as failed; Lix reports a builder's failure
@@ -447,12 +484,16 @@ impl State {
         }
     }
 
-    /// Appends to the log, dropping the oldest line when full.
-    fn push_log(&mut self, line: String) {
-        if self.log.len() == LOG_LINES {
-            self.log.pop_front();
+    /// Appends to a log, dropping its oldest line when full.
+    fn push_log(&mut self, key: &str, line: String) {
+        let log = self.logs.entry(key.to_owned()).or_default();
+        if log.len() == LOG_LINES {
+            log.pop_front();
         }
-        self.log.push_back(line);
+        log.push_back(line);
+        if self.last_log != key {
+            key.clone_into(&mut self.last_log);
+        }
     }
 
     /// Build counts: from the plan and what was seen when nix listed one,
@@ -462,7 +503,7 @@ impl State {
         let failed = self.built.iter().filter(|b| b.failed).count() as u64;
         let done = self.built.len() as u64 - failed;
         let running = self.builds.len() as u64;
-        if !self.planned.is_empty() {
+        if self.saw_plan {
             let expected = (self.planned.len() as u64).max(done + failed + running);
             return Counts {
                 done,
@@ -484,14 +525,17 @@ impl State {
             .fold(Counts::default(), |a, &b| a.add(b))
     }
 
-    /// Path-copy counts: nix's own when it reports them, else what was seen.
+    /// Path-copy counts: from nix's listing and what was seen when nix
+    /// listed what it fetches (its own expected count drifts while it
+    /// resolves goals), else nix's own, else what was seen.
     pub fn copy_counts(&self) -> Counts {
-        if self.copy_counts.is_empty() {
-            let done = self.copied.len() as u64;
-            let running = self.copies.len() as u64;
+        let done = self.copied.len() as u64;
+        let running = self.copies.len() as u64;
+        if self.saw_plan || self.copy_counts.is_empty() {
+            let expected = self.planned_fetches.max(done + running);
             return Counts {
                 done,
-                expected: done + running,
+                expected,
                 running,
                 failed: 0,
             };
@@ -584,6 +628,8 @@ impl State {
     pub fn estimate(&self, drv: &str, machine: Option<&str>) -> Option<Duration> {
         self.history
             .estimate(machine.unwrap_or_default(), &self.report_name(drv))
+            // nom records trivial builds as 0 s, which estimates nothing.
+            .filter(|&secs| secs > 0)
             .map(Duration::from_secs)
     }
 
@@ -711,6 +757,45 @@ mod tests {
     /// The same where one builder exits 3, failing its dependent.
     const FAILURE: &str = include_str!("../tests/lix-failure.log");
 
+    /// `nix build nixpkgs#gimp` (Lix 2.96): 21 paths substituted, nothing
+    /// built, progress thinned.
+    const DOWNLOAD: &str = include_str!("../tests/lix-download.log");
+
+    #[test]
+    fn downloads_count_from_the_listing_and_track_unpacked_bytes() {
+        let mut state = State::new(History::default(), reader(DOWNLOAD));
+        for line in DOWNLOAD.lines() {
+            state.apply(Line::parse(line));
+            // Lix's own count claims 65 paths at this point.
+            if line.contains(r#""fields":[19,65,1,0]"#) {
+                assert_eq!(state.copy_counts().expected, 21);
+                // The bar's total is the announced unpacked size, not a sum
+                // that grows with each finished path.
+                let (done, total) = state.copy_bytes();
+                assert!(done < total && total == 690_460_208, "{done} / {total}");
+            }
+            assert!(
+                !state
+                    .activity
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("downloading")
+            );
+        }
+        assert_eq!(state.build_counts().expected, 0);
+        assert_eq!(
+            state.copy_counts(),
+            Counts {
+                done: 21,
+                expected: 21,
+                running: 0,
+                failed: 0
+            }
+        );
+        let (done, total) = state.copy_bytes();
+        assert!(done <= total && total == 690_460_208, "{done} / {total}");
+    }
+
     #[test]
     fn plan_becomes_a_dependency_tree_with_statuses() {
         let mut state = feed(FAILURE);
@@ -750,11 +835,15 @@ mod tests {
         names.sort_unstable();
         assert_eq!(names, ["a-18439", "b-18439", "c-18439", "top-18439"]);
         assert_eq!(state.copied[0].name, "hello-2.12.3");
-        assert!(
-            state
-                .log
-                .iter()
-                .any(|l| l.ends_with("top-18439>\x1b[0m top step 3"))
+        // Each build's log is its own, without a name prefix.
+        let top = state
+            .planned
+            .iter()
+            .find(|d| d.contains("-top-"))
+            .expect("top is planned");
+        assert_eq!(
+            state.logs[top].back().map(String::as_str),
+            Some("top step 3")
         );
         assert_eq!(state.errors(), 0);
         assert_eq!(state.outcome.map(|o| o.0), Some(Outcome::Done));

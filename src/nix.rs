@@ -7,6 +7,8 @@ use serde_json::Value;
 pub mod act {
     /// One store path copied, substituted or downloaded.
     pub const COPY_PATH: u32 = 100;
+    /// A download (a NAR or a narinfo); under a copy, that copy's NAR.
+    pub const FILE_TRANSFER: u32 = 101;
     /// The goal of a whole build invocation; carries `SetExpected` totals.
     pub const REALISE: u32 = 102;
     /// Every path copy of an invocation; carries path-count progress.

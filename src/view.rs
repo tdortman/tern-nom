@@ -8,7 +8,7 @@ use tern_sdk::{
 };
 
 use crate::{
-    nix::store_name,
+    nix::{store_name, strip_ansi},
     state::{Counts, DepNode, DrvStatus, Outcome, Severity, State},
 };
 
@@ -62,7 +62,9 @@ fn count_badges(c: Counts, label: &str, key: &str, finished: bool) -> Vec<Node> 
     } else {
         format!("{}/{} {label}", c.done, c.expected)
     };
-    out.push(ui::badge(text).tone(tone).key(format!("{key}.n")).into());
+    if !finished || c.done > 0 {
+        out.push(ui::badge(text).tone(tone).key(format!("{key}.n")).into());
+    }
     if c.failed > 0 {
         out.push(
             ui::badge(format!("{} failed", c.failed))
@@ -79,13 +81,16 @@ fn summary(state: &State) -> Node {
     let mut row: Vec<Node> = Vec::new();
     match state.outcome {
         None => {
-            let label = state.activity.as_deref().unwrap_or(
-                if state.builds.is_empty() && state.copies.is_empty() {
-                    "Evaluating"
-                } else {
+            let label = state
+                .activity
+                .as_deref()
+                .unwrap_or(if !state.builds.is_empty() {
                     "Building"
-                },
-            );
+                } else if !state.copies.is_empty() {
+                    "Fetching"
+                } else {
+                    "Evaluating"
+                });
             row.push(
                 ui::spinner()
                     .style("dots")
@@ -112,19 +117,21 @@ fn summary(state: &State) -> Node {
     let finished = state.outcome.is_some();
     row.extend(count_badges(state.build_counts(), "built", "b", finished));
     row.extend(count_badges(state.copy_counts(), "fetched", "c", finished));
-    let (done, total) = state.copy_bytes();
-    if total > 0 {
+    // While running, the download bar below says this.
+    let (fetched_bytes, _) = state.copy_bytes();
+    if finished && fetched_bytes > 0 {
         row.push(
-            ui::text(ui::span(format!("↓ {} / {}", size(done), size(total))).style("muted"))
+            ui::text(ui::span(format!("↓ {}", size(fetched_bytes))).style("muted"))
                 .key("bytes")
                 .into(),
         );
     }
-    let warnings = state
+    let warnings: usize = state
         .notes
         .iter()
         .filter(|n| n.severity == Severity::Warning)
-        .count();
+        .map(|n| n.count)
+        .sum();
     if warnings > 0 {
         let label = if warnings == 1 {
             "1 warning".to_owned()
@@ -188,7 +195,7 @@ fn running_builds(state: &State) -> Option<Node> {
                 .into(),
         );
         // nom's estimate from earlier builds of the same package.
-        if let Some(est) = b.estimate.filter(|e| !e.is_zero()) {
+        if let Some(est) = b.estimate {
             let elapsed = state.started_ago(id);
             let label = match est.checked_sub(elapsed) {
                 Some(left) => format!("~{} left", took(left)),
@@ -278,7 +285,8 @@ fn running_copies(state: &State) -> Option<Node> {
     Some(ui::col().key("copies").children(rows).into())
 }
 
-/// The overall build progress bar, while running.
+/// The overall progress bar over builds and copies, while builds run; with
+/// only copies the download bar shows the same in bytes.
 fn progress(state: &State) -> Option<Node> {
     if state.outcome.is_some() {
         return None;
@@ -286,7 +294,7 @@ fn progress(state: &State) -> Option<Node> {
     let b = state.build_counts();
     let c = state.copy_counts();
     let expected = b.expected + c.expected;
-    if expected == 0 {
+    if b.expected == 0 || expected == 0 {
         return None;
     }
     let done = b.done + b.failed + c.done;
@@ -298,26 +306,226 @@ fn progress(state: &State) -> Option<Node> {
     )
 }
 
-/// Errors and warnings, as nix printed them.
-fn notes(state: &State) -> Vec<Node> {
-    state
+/// All copies as one bar, in unpacked bytes like nix's own `copied (x/y MiB)`.
+fn downloads(state: &State) -> Option<Node> {
+    if state.outcome.is_some() {
+        return None;
+    }
+    let (done, total) = state.copy_bytes();
+    if total == 0 {
+        return None;
+    }
+    let paths = state.copy_counts();
+    let label = format!(
+        "{} / {} · {}/{} paths",
+        size(done),
+        size(total),
+        paths.done,
+        paths.expected
+    );
+    Some(
+        ui::row()
+            .gap("sm")
+            .align("center")
+            .key("dl")
+            .children(nodes![
+                ui::icon("download").tone("info").key("i"),
+                ui::progress()
+                    .value(done as f64 / total as f64)
+                    .label(label)
+                    .tone("info")
+                    .grow(1.0)
+                    .key("b"),
+            ])
+            .into(),
+    )
+}
+
+/// `text` with store paths cut down to the name and the path inside it:
+/// `/nix/store/<hash>-source/lib/x.nix` reads `source/lib/x.nix`.
+fn shorten(text: &str) -> String {
+    let is_path = |c: u8| c.is_ascii_alphanumeric() || b"/._+-".contains(&c);
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let (mut copied, mut i) = (0, 0);
+    while i + 34 <= b.len() {
+        let hash = &b[i + 1..i + 33];
+        if b[i] == b'/'
+            && b[i + 33] == b'-'
+            && hash
+                .iter()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+        {
+            // Back over the store directory to where the path starts.
+            let mut start = i;
+            while start > copied && is_path(b[start - 1]) {
+                start -= 1;
+            }
+            out.push_str(&text[copied..start]);
+            copied = i + 34;
+            i = copied;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// The `.drv` and exit code of a builder failure, in Lix's and nix's wording.
+fn builder_failure(plain: &str) -> Option<(&str, &str)> {
+    let (drv, rest) = if let Some((_, rest)) = plain.split_once("builder for '") {
+        rest.split_once('\'')?
+    } else {
+        plain.split_once("Cannot build '")?.1.split_once('\'')?
+    };
+    let code = rest.split_once("exit code ")?.1;
+    let end = code
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(code.len());
+    Some((drv, &code[..end]))
+}
+
+/// Errors: a builder failure as its name, exit code and its own log tail;
+/// anything else as nix printed it, with store paths shortened.
+fn errors(state: &State) -> Vec<Node> {
+    let mut out = Vec::new();
+    for (i, note) in state.notes.iter().enumerate() {
+        if note.severity != Severity::Error {
+            continue;
+        }
+        let plain = strip_ansi(&note.text);
+        let Some((drv, code)) = builder_failure(&plain) else {
+            let text = shorten(&note.text).replace("\n       ", "\n  ");
+            out.push(
+                ui::ansi(text.replace('\n', "\r\n"))
+                    .tone("error")
+                    .key(format!("e{i}"))
+                    .into(),
+            );
+            continue;
+        };
+        // nix quotes the last lines with `> `; the log kept here has more.
+        let tail: Vec<&str> = match state.logs.get(drv) {
+            Some(log) => log
+                .iter()
+                .skip(log.len().saturating_sub(LOG_TAIL))
+                .map(String::as_str)
+                .collect(),
+            None => plain
+                .lines()
+                .filter_map(|l| l.trim_start().strip_prefix("> "))
+                .collect(),
+        };
+        let mut body = nodes![
+            ui::row()
+                .gap("sm")
+                .align("center")
+                .key("h")
+                .children(nodes![
+                    ui::icon("x").tone("error").key("i"),
+                    ui::text(vec![
+                        ui::span(store_name(drv)).style("error strong"),
+                        ui::span(format!(" failed with exit code {code}")).style("error"),
+                    ])
+                    .key("t"),
+                ]),
+        ];
+        if !tail.is_empty() {
+            let text: String = tail.iter().map(|l| format!("{l}\x1b[0m\r\n")).collect();
+            body.push(
+                ui::ansi(text)
+                    .follow(true)
+                    .max(Bound::h(Extent::Lines(20.0)))
+                    .key("log")
+                    .into(),
+            );
+        }
+        body.push(
+            ui::text(vec![
+                ui::span("nix log ").style("muted"),
+                ui::span(drv).style("code"),
+            ])
+            .key("hint")
+            .into(),
+        );
+        out.push(
+            ui::col()
+                .gap("xs")
+                .tone("error")
+                .role("nom.failure")
+                .key(format!("e{i}"))
+                .children(body)
+                .into(),
+        );
+    }
+    out
+}
+
+/// `text` with quoted code as code spans: Markdown's `x` and the GNU-style
+/// `x' that NixOS option warnings use.
+fn code_spans(text: &str) -> Vec<ui::Span> {
+    let mut spans = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(['`', '\'']) else {
+            break;
+        };
+        if open > 0 {
+            spans.push(ui::span(&rest[..open]));
+        }
+        spans.push(ui::span(&after[..close]).style("code"));
+        rest = &after[close + 1..];
+    }
+    if !rest.is_empty() {
+        spans.push(ui::span(rest));
+    }
+    spans
+}
+
+/// Warnings, deduplicated, one line each, in a folded section.
+fn warnings(state: &State) -> Option<Node> {
+    let rows: Vec<Node> = state
         .notes
         .iter()
         .enumerate()
-        .filter(|(_, n)| n.severity != Severity::Info)
+        .filter(|(_, n)| n.severity == Severity::Warning)
         .map(|(i, n)| {
-            let tone = if n.severity == Severity::Error {
-                "error"
-            } else {
-                "warning"
-            };
-            ui::ansi(n.text.replace('\n', "\r\n"))
-                .tone(tone)
-                .role("nom.note")
-                .key(format!("n{i}"))
+            let plain = shorten(&strip_ansi(&n.text));
+            let message = plain
+                .trim_start()
+                .trim_start_matches("evaluation warning:")
+                .trim_start_matches("warning:")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut spans = code_spans(&message);
+            if n.count > 1 {
+                spans.push(ui::span(format!("  ×{}", n.count)).style("muted"));
+            }
+            ui::row()
+                .gap("sm")
+                .key(format!("w{i}"))
+                .children(nodes![
+                    ui::icon("warn").tone("warning").key("i"),
+                    ui::text(spans).grow(1.0).key("t")
+                ])
                 .into()
         })
-        .collect()
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    Some(
+        ui::section()
+            .head(ui::span("Warnings").style("warning"))
+            .collapsible(true)
+            .collapsed(true)
+            .key("warnings")
+            .children(rows)
+            .into(),
+    )
 }
 
 /// Order among siblings: what needs attention first.
@@ -448,24 +656,30 @@ fn fetched(state: &State) -> Option<Node> {
     )
 }
 
-/// The tail of the build output.
+/// The output of the build that printed last, without name prefixes.
 fn log(state: &State) -> Option<Node> {
-    if state.log.is_empty() {
+    let key = state.last_log.as_str();
+    let lines = state.logs.get(key).filter(|l| !l.is_empty())?;
+    // A failed build's log is already in its failure block.
+    if state.status(key) == DrvStatus::Failed {
         return None;
     }
-    let skip = state.log.len().saturating_sub(LOG_TAIL);
-    let mut text = String::new();
-    for line in state.log.iter().skip(skip) {
-        text.push_str(line);
-        text.push_str("\x1b[0m\r\n");
-    }
-    let failed = matches!(state.outcome, Some((Outcome::Failed, _)));
-    let collapsed = state.outcome.is_some() && !failed;
+    let skip = lines.len().saturating_sub(LOG_TAIL);
+    let text: String = lines
+        .iter()
+        .skip(skip)
+        .map(|l| format!("{l}\x1b[0m\r\n"))
+        .collect();
+    let head = if key.is_empty() {
+        "Output".to_owned()
+    } else {
+        format!("Log · {}", store_name(key))
+    };
     Some(
         ui::section()
-            .head("Build log")
+            .head(head)
             .collapsible(true)
-            .collapsed(collapsed)
+            .collapsed(state.outcome.is_some())
             .key("log")
             .child(
                 ui::ansi(text)
@@ -487,10 +701,12 @@ pub fn view(state: &State, title: &str) -> View {
     };
     let mut body: Vec<Node> = vec![summary(state)];
     body.extend(progress(state));
+    body.extend(downloads(state));
     body.extend(running_builds(state));
     body.extend(running_copies(state));
-    body.extend(notes(state));
+    body.extend(errors(state));
     body.extend(deps(state));
+    body.extend(warnings(state));
     body.extend(fetched(state));
     body.extend(log(state));
     View::new().main([ui::card()
@@ -499,4 +715,59 @@ pub fn view(state: &State, title: &str) -> View {
         .role("nom.card")
         .key("nom")
         .children(body)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HASH: &str = "8nk26gfn51s07v339n5lycablfkl5lj7";
+
+    #[test]
+    fn shortens_store_paths_in_quotes_and_after_unicode() {
+        let warning = format!(
+            "warning: defined in `/nix/store/{HASH}-nix/systems/vm/default.nix' → `/x/{HASH}-a.drv`"
+        );
+        assert_eq!(
+            shorten(&warning),
+            "warning: defined in `nix/systems/vm/default.nix' → `a.drv`"
+        );
+        assert_eq!(shorten("no paths here"), "no paths here");
+    }
+
+    #[test]
+    fn quotes_code_in_markdown_and_gnu_style() {
+        let spans = code_spans("The option `a.b' in `x.nix' is now `c.d`.");
+        let code: Vec<_> = spans
+            .iter()
+            .filter(|s| s.s.as_deref() == Some("code"))
+            .map(|s| s.t.as_str())
+            .collect();
+        assert_eq!(code, ["a.b", "x.nix", "c.d"]);
+        assert_eq!(spans.last().map(|s| s.t.as_str()), Some("."));
+        // An unclosed quote stays text.
+        assert_eq!(code_spans("it`s").len(), 1);
+    }
+
+    #[test]
+    fn finds_builder_failures_in_lix_and_nix_wording() {
+        let lix = format!(
+            "error: builder for '/nix/store/{HASH}-c.drv' failed with exit code 3;\n  last 5 log lines:"
+        );
+        assert_eq!(
+            builder_failure(&lix),
+            Some((format!("/nix/store/{HASH}-c.drv").as_str(), "3"))
+        );
+        let nix = format!(
+            "error: Cannot build '/nix/store/{HASH}-c.drv'.\n       Reason: builder failed with exit code 12."
+        );
+        assert_eq!(
+            builder_failure(&nix),
+            Some((format!("/nix/store/{HASH}-c.drv").as_str(), "12"))
+        );
+        assert_eq!(
+            builder_failure("error: 1 dependencies of derivation failed to build"),
+            None
+        );
+    }
 }

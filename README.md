@@ -8,15 +8,19 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 ## What the card shows
 
 - Built and fetched counts, an overall progress bar, and a timer.
+- A download bar over all paths fetched from caches, and one bar per path being fetched.
 - One row per running build, with its stdenv phase, its last output line, and how long it has run.
   If nom has timed the same package before, the row also has a progress bar against that estimate.
-- One row per download, with a byte progress bar.
-- Errors and warnings as nix prints them.
+- A failed build as its name, exit code, its own last log lines, and the `nix log` command.
+  Other errors show as nix prints them, with store paths cut down to the package name.
 - The derivations nix builds, as a tree from what you asked for down to its inputs.
   Each one shows whether it is waiting, building, built, or failed, with its time.
   A subtree stays open while something in it builds or has failed, and you can fold any of them.
+- Warnings in a folded section, one line each.
+  A warning nix prints several times shows once with a count, store paths are cut down to the package name, and quoted option names show as code.
 - The paths fetched from caches, in a folded section.
-- The tail of the build log, which folds once the build succeeds.
+- The log of the build that printed last, without a prefix on every line.
+  It folds once the job ends, and a failed build's log moves into its failure block.
 
 Ctrl+C stops nix as usual. The card then reads Cancelled and `nom` exits with 130.
 

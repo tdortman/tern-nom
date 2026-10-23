@@ -1,6 +1,6 @@
 //! The state as a Tern card.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use tern_sdk::{
     nodes,
@@ -24,6 +24,9 @@ type View = ui::View<Msg>;
 
 /// Running builds or copies listed before the rest fold into "+N more".
 const ROWS: usize = 8;
+
+/// How long a build or copy runs before it gets a row.
+const SETTLE: Duration = Duration::from_secs(1);
 
 /// Build log lines sent to the window.
 const LOG_TAIL: usize = 60;
@@ -99,27 +102,14 @@ fn summary(state: &State) -> Node {
     let mut row: Vec<Node> = Vec::new();
     match state.outcome {
         None => {
-            let label = state.activity.as_deref().map_or_else(
-                || {
-                    if !state.builds.is_empty() {
-                        "Building"
-                    } else if !state.copies.is_empty() {
-                        "Fetching"
-                    } else {
-                        "Evaluating"
-                    }
-                    .to_owned()
-                },
-                shorten,
-            );
-            row.push(
-                ui::spinner()
-                    .style("dots")
-                    .label(label)
-                    .key("act")
-                    .shrink(1.0)
-                    .into(),
-            );
+            let word = if !state.builds.is_empty() {
+                "Building"
+            } else if !state.copies.is_empty() {
+                "Fetching"
+            } else {
+                "Evaluating"
+            };
+            row.push(ui::spinner().style("dots").label(word).key("act").into());
         }
         Some((outcome, _)) => {
             let (icon, tone, label) = match outcome {
@@ -161,7 +151,18 @@ fn summary(state: &State) -> Node {
         };
         row.push(ui::badge(label).tone("warning").key("warn").into());
     }
-    row.push(ui::spacer().grow(1.0).key("sp").into());
+    // nix's current activity changes every frame, so it takes the spare
+    // width after the badges instead of moving them.
+    let activity = state.activity.as_deref().map(shorten).unwrap_or_default();
+    row.push(
+        ui::text(ui::span(activity).style("muted"))
+            .truncate("end")
+            .wrap("none")
+            .grow(1.0)
+            .shrink(1.0)
+            .key("sp")
+            .into(),
+    );
     let mut timer = ui::elapsed().age(ms(state.started.elapsed()));
     if let Some((_, d)) = state.outcome {
         timer = timer.stopped(u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
@@ -170,20 +171,30 @@ fn summary(state: &State) -> Node {
     ui::row()
         .gap("sm")
         .align("center")
-        .wrap(true)
         .key("sum")
         .children(row)
         .into()
 }
 
+/// Builds or copies that have run long enough to get a row: the many that
+/// end within a second would only flash in and out.
+fn settled<'a, T>(state: &State, running: &'a BTreeMap<u64, T>) -> Vec<(u64, &'a T)> {
+    running
+        .iter()
+        .filter(|(id, _)| state.outcome.is_some() || state.started_ago(**id) >= SETTLE)
+        .map(|(&id, t)| (id, t))
+        .collect()
+}
+
 /// One row per running build: name, phase, last line, timer. A click shows
 /// the build's log under its row.
 fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
-    if state.builds.is_empty() {
+    let builds = settled(state, &state.builds);
+    if builds.is_empty() {
         return None;
     }
     let mut rows: Vec<Node> = Vec::new();
-    for (&id, b) in state.builds.iter().take(ROWS) {
+    for &(id, b) in builds.iter().take(ROWS) {
         // Still running when the invocation ended: interrupted.
         let indicator: Node = if state.outcome.is_some() {
             ui::icon("stop").tone("warning").key("s").into()
@@ -274,9 +285,9 @@ fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
             );
         }
     }
-    if state.builds.len() > ROWS {
+    if builds.len() > ROWS {
         rows.push(
-            ui::text(ui::span(format!("+{} more", state.builds.len() - ROWS)).style("muted"))
+            ui::text(ui::span(format!("+{} more", builds.len() - ROWS)).style("muted"))
                 .key("more")
                 .into(),
         );
@@ -286,11 +297,12 @@ fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
 
 /// One row per running copy with its own progress bar.
 fn running_copies(state: &State) -> Option<Node> {
-    if state.copies.is_empty() {
+    let copies = settled(state, &state.copies);
+    if copies.is_empty() {
         return None;
     }
     let mut rows: Vec<Node> = Vec::new();
-    for (&id, c) in state.copies.iter().take(ROWS) {
+    for &(id, c) in copies.iter().take(ROWS) {
         let mut bar = ui::progress().tone("info").grow(1.0).key("b");
         if c.expected > 0 {
             bar = bar.value(c.done as f64 / c.expected as f64).label(format!(
@@ -323,9 +335,9 @@ fn running_copies(state: &State) -> Option<Node> {
                 .into(),
         );
     }
-    if state.copies.len() > ROWS {
+    if copies.len() > ROWS {
         rows.push(
-            ui::text(ui::span(format!("+{} more", state.copies.len() - ROWS)).style("muted"))
+            ui::text(ui::span(format!("+{} more", copies.len() - ROWS)).style("muted"))
                 .key("more")
                 .into(),
         );
@@ -587,18 +599,8 @@ fn warnings(state: &State) -> Option<Node> {
     )
 }
 
-/// Order among siblings: what needs attention first.
-fn rank(status: DrvStatus) -> u8 {
-    match status {
-        DrvStatus::Failed => 0,
-        DrvStatus::Building(_) => 1,
-        DrvStatus::Waiting => 2,
-        DrvStatus::Built(_) => 3,
-    }
-}
-
-/// One derivation and its planned inputs; whether anything in it builds or
-/// failed, which keeps it open.
+/// One derivation and its planned inputs, in plan order so siblings never
+/// swap places; whether anything in it failed, which opens it.
 fn dep_item(state: &State, node: &DepNode<'_>) -> (TreeItem, bool) {
     let status = state.status(node.drv);
     let (icon, style, detail) = match status {
@@ -626,13 +628,11 @@ fn dep_item(state: &State, node: &DepNode<'_>) -> (TreeItem, bool) {
         DrvStatus::Built(d) => ("check", "success", took(d)),
         DrvStatus::Failed => ("x", "error", "failed".to_owned()),
     };
-    let mut kids: Vec<_> = node.children.iter().collect();
-    kids.sort_by_key(|k| rank(state.status(k.drv)));
-    let mut active = matches!(status, DrvStatus::Building(_) | DrvStatus::Failed);
-    let mut children = Vec::with_capacity(kids.len());
-    for kid in kids {
-        let (item, kid_active) = dep_item(state, kid);
-        active |= kid_active;
+    let mut failed = status == DrvStatus::Failed;
+    let mut children = Vec::with_capacity(node.children.len());
+    for kid in &node.children {
+        let (item, kid_failed) = dep_item(state, kid);
+        failed |= kid_failed;
         children.push(item);
     }
     let label = vec![
@@ -643,9 +643,9 @@ fn dep_item(state: &State, node: &DepNode<'_>) -> (TreeItem, bool) {
     item.icon = Some(icon.into());
     if !children.is_empty() {
         item.children = children;
-        item = item.open(active);
+        item = item.open(failed);
     }
-    (item, active)
+    (item, failed)
 }
 
 /// What nix builds, as a tree from what was asked for down to its inputs.
@@ -657,8 +657,8 @@ fn deps(state: &State) -> Option<Node> {
     let only_root = roots.len() == 1;
     let mut tree = ui::tree().key("t");
     for root in &roots {
-        let (item, active) = dep_item(state, root);
-        let open = active || only_root;
+        let (item, failed) = dep_item(state, root);
+        let open = failed || only_root;
         tree = tree.item(if item.children.is_empty() {
             item
         } else {
@@ -749,8 +749,6 @@ pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
         Some((Outcome::Cancelled, _)) => Status::Cancelled,
     };
     let mut body: Vec<Node> = vec![summary(state)];
-    body.extend(progress(state));
-    body.extend(downloads(state));
     body.extend(running_builds(state, open));
     body.extend(running_copies(state));
     body.extend(errors(state));
@@ -758,6 +756,8 @@ pub fn view(state: &State, title: &str, open: Option<&str>) -> View {
     body.extend(warnings(state));
     body.extend(fetched(state));
     body.extend(output(state));
+    body.extend(progress(state));
+    body.extend(downloads(state));
     View::new().main([ui::card()
         .head(ui::span(title).style("mono"))
         .status(status)

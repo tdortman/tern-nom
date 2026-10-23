@@ -210,8 +210,9 @@ fn monitor(
         if ended {
             break;
         }
-        // Tree timers and estimate bars are text, so redraw while builds run.
-        let tick = !state.builds.is_empty() && last.elapsed() >= TICK;
+        // Timers and estimate bars are text, and rows appear after a second,
+        // so redraw while builds or copies run.
+        let tick = !(state.builds.is_empty() && state.copies.is_empty()) && last.elapsed() >= TICK;
         if (dirty && last.elapsed() >= FRAME) || tick {
             session.render(sf, view::view(&state, &title, open.as_deref()))?;
             last = Instant::now();

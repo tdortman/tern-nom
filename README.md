@@ -19,7 +19,8 @@ Everywhere else it runs the real `nom`, so nothing changes outside Tern.
 - Warnings in a folded section, one line each.
   A warning nix prints several times shows once with a count, store paths are cut down to the package name, and quoted option names show as code.
 - The paths fetched from caches, in a folded section.
-- Build logs stay hidden. Click a running build's row to show its log under the row, and click again to hide it.
+- Build logs stay hidden. Click a running build's row to show the last 8 lines of its log under the row, and click again to hide it.
+  The button above those lines expands them to the last 200 lines, in a box that scrolls.
   A failed build's log is always shown in its failure block.
   Output nix prints outside any build sits in a folded section.
 

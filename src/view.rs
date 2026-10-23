@@ -28,6 +28,12 @@ const ROWS: usize = 8;
 /// Build log lines sent to the window.
 const LOG_TAIL: usize = 60;
 
+/// Lines of a clicked build's log shown before "N more lines" expands it.
+const PREVIEW: u32 = 8;
+
+/// Lines of a clicked build's log sent, so expanding shows a longer tail.
+const OPEN_TAIL: usize = 200;
+
 /// `bytes` as KiB/MiB/GiB.
 fn size(bytes: u64) -> String {
     let kib = bytes as f64 / 1024.0;
@@ -251,7 +257,7 @@ fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
         rows.push(node.into());
         if shown {
             let lines = state.logs.get(&b.drv);
-            let skip = lines.map_or(0, |l| l.len().saturating_sub(LOG_TAIL));
+            let skip = lines.map_or(0, |l| l.len().saturating_sub(OPEN_TAIL));
             let text: String = lines
                 .into_iter()
                 .flatten()
@@ -261,7 +267,8 @@ fn running_builds(state: &State, open: Option<&str>) -> Option<Node> {
             rows.push(
                 ui::ansi(text)
                     .follow(true)
-                    .max(Bound::h(Extent::Lines(12.0)))
+                    .preview(PREVIEW)
+                    .max(Bound::h(Extent::Lines(30.0)))
                     .key(format!("{id}.log"))
                     .into(),
             );

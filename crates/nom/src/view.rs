@@ -1083,8 +1083,8 @@ fn package_table(packages: &[&Package], key: &str) -> Node {
 }
 
 /// What the build changes against the current system, like nh's dix diff:
-/// the system's own packages and everything added or removed open, the
-/// dependencies that only changed version or size folded.
+/// the system's own packages and everything added or removed, then the
+/// dependencies that only changed version or size in their own section.
 fn changes(state: &State) -> Option<Node> {
     let closure = state.closure.as_ref()?;
     // dix's order: changed, then added, then removed.
@@ -1124,7 +1124,7 @@ fn changes(state: &State) -> Option<Node> {
             ui::section()
                 .head(format!("Updated dependencies · {}", deps.len()))
                 .collapsible(true)
-                .collapsed(true)
+                .collapsed(false)
                 .key("deps")
                 .child(package_table(&deps, "t"))
                 .into(),
